@@ -4,16 +4,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 def find_unauthorized_entries(df, status_column='Authorization Status'):
-    """
-    Filters rows where the authorization status is 'Unauthorized'.
-
-    Args:
-        df (pd.DataFrame): Input DataFrame.
-        status_column (str): Column to check for 'Unauthorized' status.
-
-    Returns:
-        pd.DataFrame: Rows with unauthorized status.
-    """
+    
     # Normalize and check for exact 'unauthorized'
     mask = df[status_column].fillna('').astype(str).str.strip().str.lower() == 'unauthorized'
     return df[mask]

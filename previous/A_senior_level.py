@@ -5,20 +5,10 @@ import tkinter as tk
 from tkinter import messagebox
 
 def find_senior_personnel_entries(df, title_column='Title', senior_keywords=None):
-    """
-    Filters rows where the title suggests the user is a senior-level personnel.
+   
 
-    Args:
-        df (pd.DataFrame): Input DataFrame.
-        title_column (str): Name of the column that holds job titles.
-        senior_keywords (list): List of senior keywords to search for (case-insensitive).
-
-    Returns:
-        pd.DataFrame: Filtered rows entered by senior personnel.
-    """
-#'manager', 'senior',
     if senior_keywords is None:
-        senior_keywords = [ 'director', 'vp', 'cfo', 'ceo']
+        senior_keywords = [ 'manager', 'senior','director', 'vp', 'cfo', 'ceo']
 
     # Build regex pattern to match any keyword as whole word or part
     pattern = r'|'.join([re.escape(word) for word in senior_keywords])
