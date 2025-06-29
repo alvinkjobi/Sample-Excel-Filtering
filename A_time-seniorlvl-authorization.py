@@ -3,6 +3,7 @@ import os
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from tkinter import messagebox
+from tkinter import filedialog
 import re
 from dateutil import parser as dtparser
 from datetime import datetime
@@ -197,7 +198,6 @@ class SmartFilterBot:
         # Header
         header_frame = tk.Frame(self.root, bg=self.colors['bg'], height=90)
         header_frame.pack(fill=tk.X, padx=0, pady=0)
-        header_frame.pack_propagate(False)
         
         # Title and status
         title_label = tk.Label(header_frame, text="🤖 Smart Filter Assistant", 
@@ -215,6 +215,16 @@ class SmartFilterBot:
                                        font=("Segoe UI", 9), 
                                        bg=self.colors['bg'], fg="#6c757d")
         self.data_info_label.pack()
+        
+        # Upload button
+        self.upload_btn = tk.Button(
+            header_frame, text="📁 Upload Excel",
+            font=("Segoe UI", 10, "bold"),
+            bg="#17a2b8", fg="white", bd=0, relief=tk.FLAT, cursor="hand2",
+            padx=10, pady=4,
+            command=self.upload_excel_file
+        )
+        self.upload_btn.pack(pady=(5, 0))
         
         # Chat container
         chat_container = tk.Frame(self.root, bg=self.colors['chat_bg'])
@@ -278,7 +288,40 @@ class SmartFilterBot:
         # Bind mousewheel to canvas
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.root.bind_all("<MouseWheel>", self.on_mousewheel)
-        
+
+    def upload_excel_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Excel File",
+            filetypes=[("Excel files", "*.xlsx *.xls")]
+        )
+        if file_path:
+            try:
+                xls = pd.ExcelFile(file_path)
+                if not xls.sheet_names:
+                    messagebox.showerror("Error", "No sheets found in the Excel file.")
+                    self.df = pd.DataFrame()
+                    self.data_info_label.config(text="❌ No data loaded")
+                    return
+                # Always load the first sheet for now
+                df = xls.parse(xls.sheet_names[0])
+                if df.empty:
+                    messagebox.showwarning("Warning", "The selected sheet is empty.")
+                    self.df = pd.DataFrame()
+                    self.data_info_label.config(text="❌ No data loaded")
+                    return
+                self.df = df
+                self.file_path = file_path
+                self.data_info_label.config(
+                    text=f"📊 Loaded {len(self.df)} records | Columns: {', '.join(self.df.columns.tolist())}"
+                )
+                self.add_message("✅ Excel file loaded successfully!")
+                self.handle_initial_greeting("mesaage")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not load data file: {str(e)}")
+                self.df = pd.DataFrame()
+                self.data_info_label.config(text="❌ No data loaded")
+    # ...existing code...
+
     def on_mousewheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         
@@ -289,20 +332,11 @@ class SmartFilterBot:
         self.entry.configure(bg=self.colors['input_bg'])
         
     def load_data(self):
-        try:
-            file_path = r"F:\AI ML\Agent\sample-excel-filtering\UploadedJournal 2 (2).xlsx"
-            xls = pd.ExcelFile(file_path)
-            self.df = xls.parse(xls.sheet_names[0])
-            self.file_path = file_path
-            
-            # Update data info
-            self.data_info_label.config(text=f"📊 Loaded {len(self.df)} records | Columns: {', '.join(self.df.columns.tolist())}")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not load data file: {str(e)}")
-            self.df = pd.DataFrame()  # Empty dataframe as fallback
-            self.data_info_label.config(text="❌ No data loaded")
-            
+        # Do not load any file by default; prompt user to upload
+        self.df = pd.DataFrame()
+        self.file_path = None
+        self.data_info_label.config(text="❌ No data loaded. Please upload an Excel file to begin.")
+                
     def add_message(self, text, is_user=False, show_options=False, options=None):
         # Message container
         msg_frame = tk.Frame(self.scrollable_frame, bg=self.colors['chat_bg'])
@@ -533,8 +567,7 @@ class SmartFilterBot:
                            show_options=True,
                            options=[
                                ("✅ Use default search", "Use default senior titles"),
-                               ("🔧 Custom titles", "I want to specify custom titles")
-                           ])
+                               ])
         elif any(word in user_input.lower() for word in ['authorization', 'authorized', 'unauthorized', 'auth']):
             self.state['mode'] = 'Authorization_filtering'
             self.state['filter_type_selected'] = 'Authorization'
@@ -543,7 +576,6 @@ class SmartFilterBot:
                            show_options=True,
                            options=[
                                ("✅ Use default search", "Use default Authorization titles"),
-                               ("🔧 Custom titles", "I want to specify custom titles")
                            ])
         elif any(word in user_input.lower() for word in ['name', 'employee']):
             self.add_message("Employee name filtering is coming soon! 👤\n\nFor now, I can help you with time-based filtering or senior personnel filtering. Which would you prefer?",
