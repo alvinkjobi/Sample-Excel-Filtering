@@ -11,8 +11,17 @@ from datetime import datetime
 def filter_by_time_range(df, start_time_str, end_time_str, filter_type, time_column='Time', time_format="%H:%M:%S"):
     df['TimeOnly'] = pd.to_datetime(df[time_column], format=time_format, errors='coerce').dt.time
     try:
-        start_time = pd.to_datetime(start_time_str, format=time_format).time()
-        end_time = pd.to_datetime(end_time_str, format=time_format).time()
+        # Support for dual-range (outside: before start or after end)
+        if isinstance(start_time_str, (list, tuple)) and len(start_time_str) == 2 and isinstance(end_time_str, (list, tuple)) and len(end_time_str) == 2:
+            start1 = pd.to_datetime(start_time_str[0], format=time_format).time()
+            end1 = pd.to_datetime(end_time_str[0], format=time_format).time()
+            start2 = pd.to_datetime(start_time_str[1], format=time_format).time()
+            end2 = pd.to_datetime(end_time_str[1], format=time_format).time()
+            mask = (df['TimeOnly'] <= end1) | (df['TimeOnly'] >= start2)
+            return df[mask], None
+        else:
+            start_time = pd.to_datetime(start_time_str, format=time_format).time()
+            end_time = pd.to_datetime(end_time_str, format=time_format).time()
     except ValueError:
         return None, "❌ Invalid time format. Please use HH:MM:SS."
     if filter_type == 'inside':
@@ -38,77 +47,123 @@ def parse_time_string(s):
         return None
 
 def extract_time_range_and_type(user_input):
-    """Extract time range and filter type from user input with improved regex patterns"""
-    
-    # Clean the input
+    """Extract time range and filter type from user input with improved regex patterns, including 'before'/'after' logic for inside/outside."""
     user_input = user_input.strip()
-    print(f"Debug: Processing input: '{user_input}'")
-    
-    # Improved patterns with better group handling
-    patterns = [
-        # Pattern 1: "X to Y", "X - Y" (most common)
-        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 2: "between X and Y"
-        r'between\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+and\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 3: "from X to Y"
-        r'from\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+to\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 4: "X and Y" (simple)
-        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+and\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)'
-    ]
-    
-    start_time, end_time = None, None
-    
-    for i, pattern in enumerate(patterns):
-        match = re.search(pattern, user_input, re.IGNORECASE)
-        if match:
-            print(f"Debug: Pattern {i+1} matched: {match.groups()}")
-            
-            # All patterns now use consistent group numbering (1 and 2)
-            start_raw = match.group(1).strip()
-            end_raw = match.group(2).strip()
-            
-            print(f"Debug: Extracted times - start: '{start_raw}', end: '{end_raw}'")
-            
-            start_time = parse_time_string(start_raw)
-            end_time = parse_time_string(end_raw)
-            
-            print(f"Debug: Parsed times - start: '{start_time}', end: '{end_time}'")
-            break
-    
-    # Determine filter type
-    if re.search(r'outside|not between|except|not working|exclude', user_input, re.IGNORECASE):
+
+    # Determine filter type first
+    if re.search(r'outside|not between|except|not working|exclude|before.*or after', user_input, re.IGNORECASE):
         filter_type = 'outside'
     else:
         filter_type = 'inside'
-    
-    print(f"Debug: Final result - start: {start_time}, end: {end_time}, type: {filter_type}")
+
+    # Special handling for "before X or after Y"
+    before_after_pattern = r'before\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:,|\s)*or\s*after\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)'
+    match = re.search(before_after_pattern, user_input, re.IGNORECASE)
+    if match:
+        before_raw = match.group(1).strip()
+        after_raw = match.group(2).strip()
+        before_time = parse_time_string(before_raw)
+        after_time = parse_time_string(after_raw)
+        if filter_type == 'outside':
+            # Outside: before X or after Y
+            return (
+                ['00:00:00', after_time],
+                [before_time, '23:59:59'],
+                'outside'
+            )
+        else:
+            # Inside: after Y to before X
+            return after_time, before_time, 'inside'
+
+    # Handle "after X" or "before Y" individually
+    after_pattern = r'after\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)'
+    before_pattern = r'before\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)'
+    after_match = re.search(after_pattern, user_input, re.IGNORECASE)
+    before_match = re.search(before_pattern, user_input, re.IGNORECASE)
+    if after_match and before_match:
+        after_time = parse_time_string(after_match.group(1).strip())
+        before_time = parse_time_string(before_match.group(1).strip())
+        if filter_type == 'outside':
+            # Outside: before X or after Y
+            return (
+                ['00:00:00', after_time],
+                [before_time, '23:59:59'],
+                'outside'
+            )
+        else:
+            # Inside: after Y to before X
+            return after_time, before_time, 'inside'
+    elif after_match:
+        after_time = parse_time_string(after_match.group(1).strip())
+        if filter_type == 'outside':
+            return (
+                ['00:00:00', after_time],
+                [after_time, '23:59:59'],
+                'outside'
+            )
+        else:
+            # Inside: after X means from X to end of day
+            return after_time, '23:59:59', 'inside'
+    elif before_match:
+        before_time = parse_time_string(before_match.group(1).strip())
+        if filter_type == 'outside':
+            return (
+                ['00:00:00', before_time],
+                [before_time, '23:59:59'],
+                'outside'
+            )
+        else:
+            # Inside: before X means from start of day to X
+            return '00:00:00', before_time, 'inside'
+
+    # Improved patterns with better group handling
+    patterns = [
+        # Range patterns
+        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:or|and|to|-)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
+        r'between\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:or|and|to|-)\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
+        
+        r'from\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:or|and|to|-)\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
+        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:or|and|to|-)\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
+        
+        # NEW: before/after pattern
+        r'(before|after)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))'
+    ]
+
+    start_time, end_time = None, None
+    for i, pattern in enumerate(patterns):
+        match = re.search(pattern, user_input, re.IGNORECASE)
+        if match:
+            start_raw = match.group(1).strip()
+            end_raw = match.group(2).strip()
+            start_time = parse_time_string(start_raw)
+            end_time = parse_time_string(end_raw)
+            break
+
     return start_time, end_time, filter_type
 
 def find_senior_personnel_entries(df, title_column='Title', senior_keywords=None):
-    """Filter entries to show only senior personnel based on job titles"""
-    if senior_keywords is None:
-        senior_keywords = ['manager', 'senior', 'director', 'vp', 'cfo', 'ceo']
-
-    # Match base word and its plural form (e.g., manager|managers)
-    pattern = r'|'.join([rf'{re.escape(word)}s?' for word in senior_keywords])
-
-    mask = df[title_column].fillna('').astype(str).str.lower().str.contains(pattern)
+    """
+    Filter entries to show only those where the Title column contains
+    ANY of the user-given titles (case-insensitive, substring match).
+    Handles input like 'accountant, cfo and manager' or 'manager and cfo'.
+    """
+    if not senior_keywords:
+        return pd.DataFrame(columns=df.columns)
+    # If a single string is given, split by comma, 'and', or 'or'
+    if isinstance(senior_keywords, str):
+        parts = re.split(r',|\band\b|\bor\b', senior_keywords)
+        senior_keywords = [p.strip().lower() for p in parts if p.strip()]
+    else:
+        # Lowercase all keywords for matching
+        senior_keywords = [kw.strip().lower() for kw in senior_keywords if kw.strip()]
+    # Lowercase the title column for robust matching
+    titles = df[title_column].fillna('').astype(str).str.lower()
+    # Build a mask: True if any keyword is present in the title
+    mask = titles.apply(lambda x: any(kw in x for kw in senior_keywords))
     return df[mask]
 
-def find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=None):
-    """Filter entries accurately based on authorization status using whole-word matching"""
-    if authorization_keywords is None:
-        authorization_keywords = ["authorized"]
+# Patterns for extracting multiple authorization keywords from user input (comma, 'and', 'or', quoted, etc.)
 
-    # Clean and lower the column
-    col_data = df[title_column].fillna('').astype(str).str.lower().str.strip()
-
-    # Build regex to match exact words only (not substrings)
-    pattern = r'\b(?:' + '|'.join(re.escape(word.lower()) for word in authorization_keywords) + r')\b'
-
-    # Apply regex with word boundaries
-    mask = col_data.str.contains(pattern, regex=True)
-    return df[mask]
 
 def detect_filter_intent(user_input):
     """Detect what type of filtering the user wants"""
@@ -121,17 +176,19 @@ def detect_filter_intent(user_input):
     # Senior personnel keywords
     senior_keywords = ['senior', 'manager', 'director', 'vp', 'ceo', 'cfo', 
                       'leadership', 'management', 'executive', 'supervisor', 
-                      'lead', 'head', 'chief', 'senior staff']
+                      'lead', 'head', 'chief', 'senior staff','accountant','senior accountant','junior accountant','finance manager']
     # Authorization keywords
     authorization_keywords = ['authorized', 'unauthorized', 'authorization', 'auth', 
                              'permit', 'permission', 'access', 'clearance']
     # Check for time patterns
     time_patterns = [
-        r'\d{1,2}(?::\d{2})?\s*(?:am|pm)',
-        r'\d{1,2}:\d{2}',
-        r'between.*and.*\d',
-        r'from.*to.*\d'
+        r'\d{1,2}(?::\d{2})?\s*(?:am|pm)',           # '9 am', '10:30pm'
+        r'\d{1,2}:\d{2}',                            # '14:30'
+        r'between\s+\d{1,2}.*and\s+\d',              # 'between 9 and 5'
+        r'from\s+\d{1,2}.*to\s+\d',                  # 'from 9 to 5'
+        r'(?:before|after)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?'  # 'before 9:00 AM', 'after 5 PM'
     ]
+
     
     has_time_keywords = any(keyword in user_input for keyword in time_keywords)
     has_time_pattern = any(re.search(pattern, user_input, re.IGNORECASE) for pattern in time_patterns)
@@ -146,6 +203,131 @@ def detect_filter_intent(user_input):
         return 'Authorization'
     
     return 'unknown'
+
+# Patterns for extracting multiple titles from user input (comma, 'and', 'or', quoted, etc.)
+TITLE_PATTERNS = [
+    # Quoted titles: "Manager", "CFO"
+    r'"([^"]+)"',
+    # titles containing ... (comma, and, or separated)
+    r'titles?\s+containing\s+([^)]+)',
+    # Comma-separated or 'and'/'or' separated list (e.g., manager, cfo and accountant)
+    r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
+    # Single word fallback
+    r'([a-zA-Z0-9\s]+)'
+]
+
+def extract_titles_from_input(user_input):
+    """
+    Extracts possible titles from user input using TITLE_PATTERNS.
+    Returns a list of titles or None.
+    """
+    for pattern in TITLE_PATTERNS:
+        match = re.findall(pattern, user_input, re.IGNORECASE)
+        if match:
+            # If quoted, match is already a list
+            if pattern == r'"([^"]+)"':
+                return [m.strip().lower() for m in match if m.strip()]
+            # If 'titles containing ...'
+            if pattern == r'titles?\s+containing\s+([^)]+)':
+                titles_str = match[0]
+                parts = re.split(r',|\band\b|\bor\b', titles_str)
+                return [p.strip().lower() for p in parts if p.strip()]
+            # If comma/and/or separated
+            if pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            # Single word fallback
+            if pattern == r'([a-zA-Z0-9\s]+)':
+                return [match[0].strip().lower()]
+    return None
+
+#Authorization patterns for extracting multiple keywords from user input (comma, 'and', 'or', quoted, etc.)
+def find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=None):
+    """
+    Filter entries to show only those where the Title column contains
+    ANY of the user-given titles (case-insensitive, substring match).
+    Handles input like 'authorized and unauthorized' or 'authorized' or 'unauthorized'.
+    """
+    if not authorization_keywords:
+        return pd.DataFrame(columns=df.columns)
+    if isinstance(authorization_keywords, str):
+        parts = re.split(r',|\band\b|\bor\b', authorization_keywords)
+        authorization_keywords = [p.strip().lower() for p in parts if p.strip()]
+    else:
+        authorization_keywords = [kw.strip().lower() for kw in authorization_keywords if kw.strip()]
+    titles = df[title_column].fillna('').astype(str).str.lower()
+    # Use whole word match to avoid 'authorized' matching 'unauthorized'
+    patterns = [rf'\b{re.escape(kw)}\b' for kw in authorization_keywords]
+    combined_pattern = '|'.join(patterns)
+    mask = titles.str.contains(combined_pattern, regex=True)
+    return df[mask]
+
+AUTHORIZATION_PATTERNS = [
+    r'"([^"]+)"',
+    r'authorization\s+statuses?\s+containing\s+([^)]+)',
+    r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?',
+    r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
+    r'([a-zA-Z0-9\s]+)'
+]
+
+
+def extract_authorization_statuses_from_input(user_input):
+    """
+    Extracts possible authorization statuses from user input using AUTHORIZATION_PATTERNS.
+    Returns a list of statuses or None.
+    Supports patterns like:
+    - "entered by unauthorized users"
+    - "Entries by unauthorized users"
+    - "Entries entered by unauthorized users"
+    - "authorization statuses containing ..."
+    - quoted, comma/and/or separated, etc.
+    """
+    AUTHORIZATION_PATTERNS = [
+        r'"([^"]+)"',
+        r'authorization\s+statuses?\s+containing\s+([^)]+)',
+        r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?',
+        r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
+        r'([a-zA-Z0-9\s]+)'
+    ]
+    for pattern in AUTHORIZATION_PATTERNS:
+        match = re.findall(pattern, user_input, re.IGNORECASE)
+        if match:
+            if pattern == r'"([^"]+)"':
+                return [m.strip().lower() for m in match if m.strip()]
+            if pattern == r'authorization\s+statuses?\s+containing\s+([^)]+)':
+                titles_str = match[0]
+                parts = re.split(r',|\band\b|\bor\b', titles_str)
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?':
+                m = re.search(pattern, user_input, re.IGNORECASE)
+                if m:
+                    return [m.group(1).strip().lower()]
+            if pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'([a-zA-Z0-9\s]+)':
+                return [match[0].strip().lower()]
+    # Fallback: check for common authorization words in the input
+    common_words = [
+        'unauthorized', 'authorized', 'authorization', 'auth',
+        'permit', 'permission', 'access', 'clearance'
+    ]
+    lowered = user_input.lower()
+    found = []
+    for word in common_words:
+        if re.search(rf'\b{re.escape(word)}\b', lowered):
+            found.append(word)
+    if not found:
+        for word in common_words:
+            if word in lowered:
+                found.append(word)
+    found = sorted(found, key=lambda w: -len(w))
+    final = []
+    for w in found:
+        if not any(w != other and w in other for other in found):
+            final.append(w)
+    return final if final else None
+
 
 class SmartFilterBot:
     def __init__(self):
@@ -163,7 +345,8 @@ class SmartFilterBot:
             'start_time': None,
             'end_time': None,
             'time_filter_type': 'inside',
-            'senior_keywords': None
+            'senior_keywords': None,
+            'authorization_keywords': None,
         }
         
     def setup_window(self):
@@ -320,7 +503,6 @@ class SmartFilterBot:
                 messagebox.showerror("Error", f"Could not load data file: {str(e)}")
                 self.df = pd.DataFrame()
                 self.data_info_label.config(text="❌ No data loaded")
-    # ...existing code...
 
     def on_mousewheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -438,6 +620,7 @@ class SmartFilterBot:
             self.handle_awaiting_end(user_input)
             
     def handle_initial_greeting(self, user_input):
+
         """Handle the initial conversation and determine filter type"""
         filter_intent = detect_filter_intent(user_input)
         
@@ -470,27 +653,49 @@ class SmartFilterBot:
                     ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
                     ("👤 Filter by Authorized or Unauthorized", "I want to filter by Authorization Status"),
                     ("🏢 Filter by Department", "I want to filter by department"),
-                    ("📈 Custom Filter", "I want custom filtering")
+                    ("📈 Custom Filter", "I want different filtering")
                 ]
             )
             self.status_label.config(text="🤔 Waiting for filter type selection")
+
     def handle_authorization_filtering(self, user_input):
-        """Handle authorization filtering logic"""
-        user_input_lower = user_input.lower()
-
-        if 'default' in user_input_lower or 'standard' in user_input_lower:
-            # Use default keywords
-            self.filter_and_respond_auth(None)
+        extracted_statuses = extract_authorization_statuses_from_input(user_input)
+        if extracted_statuses:
+            self.filter_and_respond_authorization(extracted_statuses)
         else:
-            # Try to extract keywords from the input
-            potential_keywords = self.extract_auth_keywords(user_input)
-            if potential_keywords:
-                self.filter_and_respond_auth(potential_keywords)
-            else:
-                # Use default if no specific keywords found
-                self.filter_and_respond_auth(None)
+            self.add_message("Please specify the authorization statuses you want to search for, separated by commas or using 'and/or'.\nExample: 'authorized, unauthorized, pending'")
+            self.status_label.config(text="⌨️ Waiting for statuses")
 
-    def filter_and_respond_auth(self, custom_keywords=None):
+    def filter_and_respond_authorization(self, custom_keywords=None):
+        try:
+            self.status_label.config(text="🔒 Filtering for authorization statuses...")
+            self.root.update()
+            if custom_keywords:
+                authorization_titles = custom_keywords
+            else:
+                authorization_titles = ['authorized', 'unauthorized', 'pending']
+            filtered_df = find_authorization_entries(self.df, title_column='Authorization Status', authorization_keywords=authorization_titles)
+            if filtered_df.empty:
+                self.add_message("⚠️ No authorization records found with the given criteria.\nWould you like to try different statuses?")
+                self.status_label.config(text="⚠️ No matches found")
+            else:
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_Authorization.xlsx")
+                filtered_df.to_excel(output_file_path, index=False)
+                self.add_message(
+                    f"✅ Filter complete!\n\n"
+                    f"• Authorization statuses used: {', '.join(authorization_titles)}\n"
+                    f"• Records found: {len(filtered_df)}\n"
+                    f"• Saved to: Filtered_Authorization.xlsx\n\n"
+                    f"Want to apply another filter?"
+                )
+                self.status_label.config(text="✅ Filter completed successfully")
+        except Exception as e:
+            self.add_message(f"❌ Error during authorization filtering: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+        self.reset_state()
+        self.state['mode'] = 'filter_selection'
+        self.entry.focus_set()
+
         try:
             self.status_label.config(text="👔 Filtering for authorization...")
             self.root.update()
@@ -537,7 +742,8 @@ class SmartFilterBot:
         self.reset_state()
         self.state['mode'] = 'filter_selection'
         self.entry.focus_set()
-    def extract_auth_keywords(self, user_input):
+
+
         """Extract potential authorization keywords from user input"""
         common_titles = [ 'authorized', 'unauthorized', 'authorization', 'auth',
                           'permit', 'permission', 'access', 'clearance']
@@ -609,7 +815,13 @@ class SmartFilterBot:
         self.state['start_time'] = start_time
         self.state['end_time'] = end_time
         self.state['time_filter_type'] = filter_type
-        
+
+        # Support for dual-range (before X or after Y)
+        if isinstance(start_time, (list, tuple)) and isinstance(end_time, (list, tuple)):
+            # Both ranges present, proceed directly
+            self.filter_and_respond_time(start_time, end_time, filter_type)
+            return
+
         if not start_time:
             self.state['mode'] = 'awaiting_start'
             self.add_message("I need the start time. Please tell me when you want the time range to begin.\n\nExamples: '9am', '09:00', '8:30am'")
@@ -621,7 +833,7 @@ class SmartFilterBot:
             self.add_message("I need the end time. Please tell me when you want the time range to end.\n\nExamples: '5pm', '17:00', '6:30pm'")
             self.status_label.config(text="⏰ Waiting for end time")
             return
-            
+
         # Process complete request
         self.filter_and_respond_time(start_time, end_time, filter_type)
       
@@ -629,22 +841,26 @@ class SmartFilterBot:
         """Handle senior personnel filtering logic"""
         user_input_lower = user_input.lower()
         
+        # Try to extract any kind of listed titles from the input
+        extracted_titles = extract_titles_from_input(user_input)
+        if extracted_titles:
+            normalized_titles = [t.lower() for t in extracted_titles]
+            self.filter_and_respond_senior(normalized_titles)
+            return
+
         if 'default' in user_input_lower or 'standard' in user_input_lower:
-            # Use default keywords
             self.filter_and_respond_senior(None)
         elif 'custom' in user_input_lower or 'specify' in user_input_lower:
             self.add_message("Please specify the senior titles you want to search for, separated by commas.\n\nExample: 'manager, director, team lead, supervisor'")
             self.status_label.config(text="⌨️ Waiting for custom titles")
             self.state['mode'] = 'awaiting_custom_titles'
         else:
-            # Try to extract keywords from the input
             potential_keywords = self.extract_senior_keywords(user_input)
             if potential_keywords:
                 self.filter_and_respond_senior(potential_keywords)
             else:
-                # Use default if no specific keywords found
                 self.filter_and_respond_senior(None)
-                
+ 
     def extract_senior_keywords(self, user_input):
         """Extract potential senior keywords from user input"""
         common_titles = ['manager', 'director', 'senior', 'vp', 'ceo', 'cfo', 'cto', 
@@ -660,9 +876,7 @@ class SmartFilterBot:
                 found_keywords.append(word)
         
         return found_keywords if found_keywords else None
-    
-
-        
+      
     def handle_awaiting_start(self, user_input):
         """Handle start time input"""
         start_time = parse_time_string(user_input)
@@ -743,7 +957,6 @@ class SmartFilterBot:
         self.state['mode'] = 'filter_selection'
         self.entry.focus_set()
 
-
     def filter_and_respond_time(self, start_time, end_time, filter_type):
         """Process the filtering and respond with results"""
         try:
@@ -764,12 +977,19 @@ class SmartFilterBot:
                 output_file_path = os.path.join(os.path.dirname(self.file_path), "FilteredOutput.xlsx")
                 filtered.to_excel(output_file_path, index=False)
                 
-                filter_desc = "inside" if filter_type == "inside" else "outside"
+                # Adjust summary for dual-range
+                if isinstance(start_time, (list, tuple)) and isinstance(end_time, (list, tuple)):
+                    filter_desc = f"outside: before {end_time[0]} or after {start_time[1]}"
+                    time_range_desc = f"before {end_time[0]} or after {start_time[1]}"
+                else:
+                    filter_desc = "inside" if filter_type == "inside" else "outside"
+                    time_range_desc = f"{start_time} to {end_time}"
+
                 self.add_message(
                     f"✅ Success! Filtered data saved!\n\n"
                     f"📊 **Results Summary:**\n"
-                    f"• Time range: {start_time} to {end_time}\n"
-                    f"• Filter type: {filter_desc} time range\n"
+                    f"• Time range: {time_range_desc}\n"
+                    f"• Filter type: {filter_desc}\n"
                     f"• Records found: {len(filtered)}\n"
                     f"• File saved: FilteredOutput.xlsx\n\n"
                     f"Would you like to perform another filter?",
@@ -793,7 +1013,7 @@ class SmartFilterBot:
     def run(self):
         # Initial greeting with delay for better UX
         self.root.after(1500, lambda: self.add_message(
-            "👋 Hello! I'm your Smart Data Filter Assistant!\n\n"
+            "👋 Hello! I'm your Smart Filter Assistant!\n\n"
             "I can help you filter and analyze your data in multiple ways. "
             "Just tell me what you're looking for, and I'll guide you through the process.\n\n"
             "💡 **Try saying something like:**\n"

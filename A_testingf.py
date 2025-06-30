@@ -3,150 +3,88 @@ import os
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from tkinter import messagebox
+from tkinter import filedialog
 import re
-from dateutil import parser as dtparser
 from datetime import datetime
 
-def filter_by_time_range(df, start_time_str, end_time_str, filter_type, time_column='Time', time_format="%H:%M:%S"):
-    df['TimeOnly'] = pd.to_datetime(df[time_column], format=time_format, errors='coerce').dt.time
-    try:
-        start_time = pd.to_datetime(start_time_str, format=time_format).time()
-        end_time = pd.to_datetime(end_time_str, format=time_format).time()
-    except ValueError:
-        return None, "❌ Invalid time format. Please use HH:MM:SS."
-    if filter_type == 'inside':
-        return df[df['TimeOnly'].between(start_time, end_time, inclusive='both')], None
-    elif filter_type == 'outside':
-        return df[~df['TimeOnly'].between(start_time, end_time, inclusive='both')], None
-    else:
-        return None, "❌ Invalid filter type. Use 'inside' or 'outside'."
-
-def parse_time_string(s):
-    try:
-        # Handle various time formats
-        s = s.strip().lower()
-        
-        # Remove common words that might interfere
-        s = re.sub(r'\b(at|around|about|approximately)\b', '', s).strip()
-        
-        # Try parsing with dateutil
-        parsed = dtparser.parse(s)
-        return parsed.strftime("%H:%M:%S")
-    except Exception as e:
-        print(f"Debug: Failed to parse '{s}': {e}")
-        return None
-
-def extract_time_range_and_type(user_input):
-    """Extract time range and filter type from user input with improved regex patterns"""
-    
-    # Clean the input
-    user_input = user_input.strip()
-    print(f"Debug: Processing input: '{user_input}'")
-    
-    # Improved patterns with better group handling
-    patterns = [
-        # Pattern 1: "X to Y", "X - Y" (most common)
-        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 2: "between X and Y"
-        r'between\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+and\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 3: "from X to Y"
-        r'from\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+to\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)',
-        # Pattern 4: "X and Y" (simple)
-        r'(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+and\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)'
-    ]
-    
-    start_time, end_time = None, None
-    
-    for i, pattern in enumerate(patterns):
-        match = re.search(pattern, user_input, re.IGNORECASE)
-        if match:
-            print(f"Debug: Pattern {i+1} matched: {match.groups()}")
-            
-            # All patterns now use consistent group numbering (1 and 2)
-            start_raw = match.group(1).strip()
-            end_raw = match.group(2).strip()
-            
-            print(f"Debug: Extracted times - start: '{start_raw}', end: '{end_raw}'")
-            
-            start_time = parse_time_string(start_raw)
-            end_time = parse_time_string(end_raw)
-            
-            print(f"Debug: Parsed times - start: '{start_time}', end: '{end_time}'")
-            break
-    
-    # Determine filter type
-    if re.search(r'outside|not between|except|not working|exclude', user_input, re.IGNORECASE):
-        filter_type = 'outside'
-    else:
-        filter_type = 'inside'
-    
-    print(f"Debug: Final result - start: {start_time}, end: {end_time}, type: {filter_type}")
-    return start_time, end_time, filter_type
-
-def find_senior_personnel_entries(df, title_column='Title', senior_keywords=None):
-    """Filter entries to show only senior personnel based on job titles"""
-    if senior_keywords is None:
-        senior_keywords = ['manager', 'senior', 'director', 'vp', 'cfo', 'ceo']
-
-    # Match base word and its plural form (e.g., manager|managers)
-    pattern = r'|'.join([rf'{re.escape(word)}s?' for word in senior_keywords])
-
-    mask = df[title_column].fillna('').astype(str).str.lower().str.contains(pattern)
-    return df[mask]
-
 def find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=None):
-    """Filter entries accurately based on authorization status using whole-word matching"""
-    if authorization_keywords is None:
-        authorization_keywords = ["authorized"]
-
-    # Clean and lower the column
-    col_data = df[title_column].fillna('').astype(str).str.lower().str.strip()
-
-    # Build regex to match exact words only (not substrings)
-    pattern = r'\b(?:' + '|'.join(re.escape(word.lower()) for word in authorization_keywords) + r')\b'
-
-    # Apply regex with word boundaries
-    mask = col_data.str.contains(pattern, regex=True)
+    """
+    Filter entries to show only those where the Title column contains
+    ANY of the user-given titles (case-insensitive, substring match).
+    Handles input like 'authorized and unauthorized' or 'authorized' or 'unauthorized'.
+    """
+    if not authorization_keywords:
+        return pd.DataFrame(columns=df.columns)
+    if isinstance(authorization_keywords, str):
+        parts = re.split(r',|\band\b|\bor\b', authorization_keywords)
+        authorization_keywords = [p.strip().lower() for p in parts if p.strip()]
+    else:
+        authorization_keywords = [kw.strip().lower() for kw in authorization_keywords if kw.strip()]
+    titles = df[title_column].fillna('').astype(str).str.lower()
+    # Use whole word match to avoid 'authorized' matching 'unauthorized'
+    patterns = [rf'\b{re.escape(kw)}\b' for kw in authorization_keywords]
+    combined_pattern = '|'.join(patterns)
+    mask = titles.str.contains(combined_pattern, regex=True)
     return df[mask]
 
+AUTHORIZATION_PATTERNS = [
+    r'"([^"]+)"',
+    r'authorization\s+statuses?\s+containing\s+([^)]+)',
+    r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?',
+    r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
+    r'([a-zA-Z0-9\s]+)'
+]
 
 
-def detect_filter_intent(user_input):
-    """Detect what type of filtering the user wants"""
-    user_input = user_input.lower()
-    
-    # Time-related keywords
-    time_keywords = ['time', 'hour', 'am', 'pm', 'morning', 'evening', 'afternoon', 
-                     'working hours', 'shift', 'schedule', 'clock']
-    
-    # Senior personnel keywords
-    senior_keywords = ['senior', 'manager', 'director', 'vp', 'ceo', 'cfo', 
-                      'leadership', 'management', 'executive', 'supervisor', 
-                      'lead', 'head', 'chief', 'senior staff']
-    # Authorization keywords
-    authorization_keywords = ['authorized', 'unauthorized', 'authorization', 'auth', 
-                             'permit', 'permission', 'access', 'clearance']
-    # Check for time patterns
-    time_patterns = [
-        r'\d{1,2}(?::\d{2})?\s*(?:am|pm)',
-        r'\d{1,2}:\d{2}',
-        r'between.*and.*\d',
-        r'from.*to.*\d'
+def extract_authorization_statuses_from_input(user_input):
+    """
+    Extracts possible authorization statuses from user input using AUTHORIZATION_PATTERNS.
+    Returns a list of statuses or None.
+    Supports patterns like:
+    - "entered by unauthorized users"
+    - "Entries by unauthorized users"
+    - "Entries entered by unauthorized users"
+    - "authorization statuses containing ..."
+    - quoted, comma/and/or separated, etc.
+    """
+    for pattern in AUTHORIZATION_PATTERNS:
+        match = re.findall(pattern, user_input, re.IGNORECASE)
+        if match:
+            if pattern == r'"([^"]+)"':
+                return [m.strip().lower() for m in match if m.strip()]
+            if pattern == r'authorization\s+statuses?\s+containing\s+([^)]+)':
+                titles_str = match[0]
+                parts = re.split(r',|\band\b|\bor\b', titles_str)
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?':
+                m = re.search(pattern, user_input, re.IGNORECASE)
+                if m:
+                    return [m.group(1).strip().lower()]
+            if pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'([a-zA-Z0-9\s]+)':
+                return [match[0].strip().lower()]
+    # Fallback: check for common authorization words in the input
+    common_words = [
+        'unauthorized', 'authorized', 'authorization', 'auth',
+        'permit', 'permission', 'access', 'clearance'
     ]
-    
-    has_time_keywords = any(keyword in user_input for keyword in time_keywords)
-    has_time_pattern = any(re.search(pattern, user_input, re.IGNORECASE) for pattern in time_patterns)
-    has_senior_keywords = any(keyword in user_input for keyword in senior_keywords)
-    has_authorization_keywords = any(keyword in user_input for keyword in authorization_keywords)   
-    
-    if has_time_keywords or has_time_pattern:
-        return 'time'
-    elif has_senior_keywords:
-        return 'senior'
-    elif has_authorization_keywords:
-        return 'Authorization'
-    
-    return 'unknown'
+    lowered = user_input.lower()
+    found = []
+    for word in common_words:
+        if re.search(rf'\b{re.escape(word)}\b', lowered):
+            found.append(word)
+    if not found:
+        for word in common_words:
+            if word in lowered:
+                found.append(word)
+    found = sorted(found, key=lambda w: -len(w))
+    final = []
+    for w in found:
+        if not any(w != other and w in other for other in found):
+            final.append(w)
+    return final if final else None
 
 class SmartFilterBot:
     def __init__(self):
@@ -159,12 +97,9 @@ class SmartFilterBot:
         
     def reset_state(self):
         self.state = {
-            'mode': 'greeting',  # greeting -> filter_selection -> time_filtering -> senior_filtering -> awaiting_start -> awaiting_end
+            'mode': 'greeting',  # greeting -> filter_selection -> authorization_filtering
             'filter_type_selected': None,
-            'start_time': None,
-            'end_time': None,
-            'time_filter_type': 'inside',
-            'senior_keywords': None
+            'authorization_keywords': None
         }
         
     def setup_window(self):
@@ -199,7 +134,6 @@ class SmartFilterBot:
         # Header
         header_frame = tk.Frame(self.root, bg=self.colors['bg'], height=90)
         header_frame.pack(fill=tk.X, padx=0, pady=0)
-        header_frame.pack_propagate(False)
         
         # Title and status
         title_label = tk.Label(header_frame, text="🤖 Smart Filter Assistant", 
@@ -217,6 +151,16 @@ class SmartFilterBot:
                                        font=("Segoe UI", 9), 
                                        bg=self.colors['bg'], fg="#6c757d")
         self.data_info_label.pack()
+        
+        # Upload button
+        self.upload_btn = tk.Button(
+            header_frame, text="📁 Upload Excel",
+            font=("Segoe UI", 10, "bold"),
+            bg="#17a2b8", fg="white", bd=0, relief=tk.FLAT, cursor="hand2",
+            padx=10, pady=4,
+            command=self.upload_excel_file
+        )
+        self.upload_btn.pack(pady=(5, 0))
         
         # Chat container
         chat_container = tk.Frame(self.root, bg=self.colors['chat_bg'])
@@ -280,7 +224,39 @@ class SmartFilterBot:
         # Bind mousewheel to canvas
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.root.bind_all("<MouseWheel>", self.on_mousewheel)
-        
+
+    def upload_excel_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Excel File",
+            filetypes=[("Excel files", "*.xlsx *.xls")]
+        )
+        if file_path:
+            try:
+                xls = pd.ExcelFile(file_path)
+                if not xls.sheet_names:
+                    messagebox.showerror("Error", "No sheets found in the Excel file.")
+                    self.df = pd.DataFrame()
+                    self.data_info_label.config(text="❌ No data loaded")
+                    return
+                # Always load the first sheet for now
+                df = xls.parse(xls.sheet_names[0])
+                if df.empty:
+                    messagebox.showwarning("Warning", "The selected sheet is empty.")
+                    self.df = pd.DataFrame()
+                    self.data_info_label.config(text="❌ No data loaded")
+                    return
+                self.df = df
+                self.file_path = file_path
+                self.data_info_label.config(
+                    text=f"📊 Loaded {len(self.df)} records | Columns: {', '.join(self.df.columns.tolist())}"
+                )
+                self.add_message("✅ Excel file loaded successfully!")
+                self.handle_initial_greeting("mesaage")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not load data file: {str(e)}")
+                self.df = pd.DataFrame()
+                self.data_info_label.config(text="❌ No data loaded")
+
     def on_mousewheel(self, event):
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         
@@ -291,20 +267,11 @@ class SmartFilterBot:
         self.entry.configure(bg=self.colors['input_bg'])
         
     def load_data(self):
-        try:
-            file_path = r"F:\AI ML\Agent\sample-excel-filtering\UploadedJournal 2 (2).xlsx"
-            xls = pd.ExcelFile(file_path)
-            self.df = xls.parse(xls.sheet_names[0])
-            self.file_path = file_path
-            
-            # Update data info
-            self.data_info_label.config(text=f"📊 Loaded {len(self.df)} records | Columns: {', '.join(self.df.columns.tolist())}")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not load data file: {str(e)}")
-            self.df = pd.DataFrame()  # Empty dataframe as fallback
-            self.data_info_label.config(text="❌ No data loaded")
-            
+        # Do not load any file by default; prompt user to upload
+        self.df = pd.DataFrame()
+        self.file_path = None
+        self.data_info_label.config(text="❌ No data loaded. Please upload an Excel file to begin.")
+                
     def add_message(self, text, is_user=False, show_options=False, options=None):
         # Message container
         msg_frame = tk.Frame(self.scrollable_frame, bg=self.colors['chat_bg'])
@@ -394,387 +361,65 @@ class SmartFilterBot:
             self.handle_initial_greeting(user_input)
         elif self.state['mode'] == 'filter_selection':
             self.handle_filter_selection(user_input)
-        elif self.state['mode'] == 'time_filtering':
-            self.handle_time_filtering(user_input)
-        elif self.state['mode'] == 'senior_filtering':
-            self.handle_senior_filtering(user_input)
-        elif self.state['mode'] == 'Authorization_filtering':
+        elif self.state['mode'] == 'authorization_filtering':
             self.handle_authorization_filtering(user_input)
-        elif self.state['mode'] == 'awaiting_start':
-            self.handle_awaiting_start(user_input)
-        elif self.state['mode'] == 'awaiting_end':
-            self.handle_awaiting_end(user_input)
-            
+
     def handle_initial_greeting(self, user_input):
-        """Handle the initial conversation and determine filter type"""
-        filter_intent = detect_filter_intent(user_input)
-        
-        if filter_intent == 'time':
-            self.state['mode'] = 'time_filtering'
-            self.state['filter_type_selected'] = 'time'
-            self.status_label.config(text="🕐 Processing time filter")
-            self.add_message("Great! I detected you want to filter by time. Let me help you with that.")
-            self.root.after(1000, lambda: self.handle_time_filtering(user_input))
-        elif filter_intent == 'senior':
-            self.state['mode'] = 'senior_filtering'
-            self.state['filter_type_selected'] = 'senior'
-            self.status_label.config(text="👔 Processing senior personnel filter")
-            self.add_message("Perfect! I'll help you filter for senior personnel. Let me process that for you.")
-            self.root.after(1000, lambda: self.handle_senior_filtering(user_input))
-        elif filter_intent == 'Authorization':
-            self.state['mode'] = 'Authorization_filtering'
-            self.state['filter_type_selected'] = 'Authorization'
-            self.status_label.config(text="👔 Processing Authorized or Unauthorized filter")
-            self.add_message("Perfect! I'll help you filter for Authorized or Unauthorized personnel. Let me process that for you.")
-            self.root.after(1000, lambda: self.handle_authorization_filtering(user_input))
-        else:
-            self.state['mode'] = 'filter_selection'
-            self.add_message(
-                "I'd be happy to help you filter your data! 📊\n\n"
-                "What type of filtering would you like to do?",
-                show_options=True,
-                options=[
-                    ("🕐 Filter by Time", "I want to filter by time"),
-                    ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
-                    ("👤 Filter by Authorized or Unauthorized", "I want to filter by Authorization Status"),
-                    ("🏢 Filter by Department", "I want to filter by department"),
-                    ("📈 Custom Filter", "I want custom filtering")
-                ]
-            )
-            self.status_label.config(text="🤔 Waiting for filter type selection")
+        self.state['mode'] = 'authorization_filtering'
+        self.state['filter_type_selected'] = 'authorization'
+        self.status_label.config(text="� Processing authorization filter")
+        self.add_message("I'll help you filter for authorization statuses. Please specify the statuses (e.g., authorized, unauthorized, pending, etc.).")
+
+    def handle_filter_selection(self, user_input):
+        self.state['mode'] = 'authorization_filtering'
+        self.state['filter_type_selected'] = 'authorization'
+        self.status_label.config(text="🔒 Processing authorization filter")
+        self.add_message("I'll help you filter for authorization statuses. Please specify the statuses (e.g., authorized, unauthorized, pending, etc.).")
 
     def handle_authorization_filtering(self, user_input):
-        """Handle authorization filtering logic"""
-        user_input_lower = user_input.lower()
-
-        if 'default' in user_input_lower or 'standard' in user_input_lower:
-            # Use default keywords
-            self.filter_and_respond_auth(None)
+        extracted_statuses = extract_authorization_statuses_from_input(user_input)
+        if extracted_statuses:
+            self.filter_and_respond_authorization(extracted_statuses)
         else:
-            # Try to extract keywords from the input
-            potential_keywords = self.extract_auth_keywords(user_input)
-            if potential_keywords:
-                self.filter_and_respond_auth(potential_keywords)
-            else:
-                # Use default if no specific keywords found
-                self.filter_and_respond_auth(None)
+            self.add_message("Please specify the authorization statuses you want to search for, separated by commas or using 'and/or'.\nExample: 'authorized, unauthorized, pending'")
+            self.status_label.config(text="⌨️ Waiting for statuses")
 
-
-    def filter_and_respond_auth(self, custom_keywords=None):
+    def filter_and_respond_authorization(self, custom_keywords=None):
         try:
-            self.status_label.config(text="👔 Filtering for authorization...")
+            self.status_label.config(text="� Filtering for authorization statuses...")
             self.root.update()
-
-            # Use custom keywords if provided, otherwise default
             if custom_keywords:
-                auth_titles = custom_keywords
+                authorization_titles = custom_keywords
             else:
-                auth_titles = [ 'authorized', 'unauthorized', 'authorization', 'auth',        
-                                'permit', 'permission', 'access', 'clearance']
-
-            filtered_df = find_authorization_entries(self.df, title_column='Authorization Status', authorization_keywords=auth_titles)
+                authorization_titles = ['authorized', 'unauthorized', 'pending']
+            filtered_df = find_authorization_entries(self.df, title_column='Authorization Status', authorization_keywords=authorization_titles)
             if filtered_df.empty:
-                self.add_message("⚠️ No authorization records found with the given criteria.\nWould you like to try different titles?",
-                                show_options=True,
-                                options=[
-                                    ("🔄 Try default titles", "Use default Authorization titles"),
-                                    ("🔧 Specify custom titles", "I want to specify custom titles")
-                                ])
+                self.add_message("⚠️ No authorization records found with the given criteria.\nWould you like to try different statuses?")
                 self.status_label.config(text="⚠️ No matches found")
             else:
-                output_file_path = os.path.join(os.path.dirname(self.file_path), "Authorization.xlsx")
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_Authorization.xlsx")
                 filtered_df.to_excel(output_file_path, index=False)
-
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Authorization titles used: {', '.join(auth_titles)}\n"
+                    f"• Authorization statuses used: {', '.join(authorization_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
-                    f"• Saved to: Authorization.xlsx\n\n"
-                    f"Want to apply another filter?",
-                    show_options=True,
-                    options=[
-                        ("🔄 Filter again", "I want to filter data again"),
-                        ("✨ New filter type", "I want different filtering")
-                    ]
+                    f"• Saved to: Filtered_Authorization.xlsx\n\n"
+                    f"Want to apply another filter?"
                 )
                 self.status_label.config(text="✅ Filter completed successfully")
-
         except Exception as e:
             self.add_message(f"❌ Error during authorization filtering: {str(e)}")
             self.status_label.config(text="❌ Error occurred")
-
-        # Reset for next task
-        self.reset_state()
-        self.state['mode'] = 'filter_selection'
-        self.entry.focus_set()
-    def extract_auth_keywords(self, user_input):
-        """Extract potential authorization keywords from user input"""
-        common_titles = [ 'authorized', 'unauthorized', 'authorization', 'auth',
-                          'permit', 'permission', 'access', 'clearance']
-        
-        # Normalize input and split using commas and 'and'
-        parts = re.split(r',|\band\b', user_input.lower())
-
-        found_keywords = []
-        for part in parts:
-            word = part.strip().rstrip('s')  # remove plural 's'
-            if word in common_titles:
-                found_keywords.append(word)
-        return found_keywords if found_keywords else None
-    
-    def handle_filter_selection(self, user_input):
-        """Handle filter type selection"""
-        if any(word in user_input.lower() for word in ['time', 'hour', 'shift', 'schedule']):
-            self.state['mode'] = 'time_filtering'
-            self.state['filter_type_selected'] = 'time'
-            self.status_label.config(text="🕐 Setting up time filter")
-            self.add_message("Perfect! Let's set up time-based filtering. 🕐\n\nYou can tell me things like:\n• 'Show data between 9am and 5pm'\n• 'Filter from 08:00 to 18:00'\n• 'Get employees working 10am to 6pm'")
-        elif any(word in user_input.lower() for word in ['senior', 'management', 'manager', 'director', 'executive', 'leadership']):
-            self.state['mode'] = 'senior_filtering'
-            self.state['filter_type_selected'] = 'senior'
-            self.status_label.config(text="👔 Setting up senior personnel filter")
-            self.add_message("Excellent! I'll help you filter for senior personnel. 👔\n\nI can find employees with titles like:\n• Managers\n• Directors\n• VPs, CEOs, CFOs\n• Senior-level positions\n• Executive roles\n\nWould you like me to use the default search or specify custom titles?",
-                           show_options=True,
-                           options=[
-                               ("✅ Use default search", "Use default senior titles"),
-                               ("🔧 Custom titles", "I want to specify custom titles")
-                           ])
-        elif any(word in user_input.lower() for word in ['authorization', 'authorized', 'unauthorized', 'auth']):
-            self.state['mode'] = 'Authorization_filtering'
-            self.state['filter_type_selected'] = 'Authorization'
-            self.status_label.config(text="👔 Setting up Authorization filter")
-            self.add_message("Great! I'll help you filter by Authorization Status. 👔\n\nYou can tell me things like:\n• 'Show only authorized personnel'\n• 'Filter out unauthorized entries'\n\nWould you like to use the default search or specify custom titles?",
-                           show_options=True,
-                           options=[
-                               ("✅ Use default search", "Use default Authorization titles"),
-                               ("🔧 Custom titles", "I want to specify custom titles")
-                           ])
-        elif any(word in user_input.lower() for word in ['name', 'employee']):
-            self.add_message("Employee name filtering is coming soon! 👤\n\nFor now, I can help you with time-based filtering or senior personnel filtering. Which would you prefer?",
-                           show_options=True,
-                           options=[
-                               ("🕐 Filter by time", "I want to filter by time"),
-                               ("👔 Filter senior personnel", "I want to filter senior personnel")
-                           ])
-            self.status_label.config(text="🚧 Feature coming soon")
-        elif any(word in user_input.lower() for word in ['department', 'dept']):
-            self.add_message("Department filtering is coming soon! 🏢\n\nFor now, I can help you with time-based filtering or senior personnel filtering. Which would you prefer?",
-                           show_options=True,
-                           options=[
-                               ("🕐 Filter by time", "I want to filter by time"),
-                               ("👔 Filter senior personnel", "I want to filter senior personnel")
-                           ])
-            self.status_label.config(text="🚧 Feature coming soon")
-        else:
-            self.add_message("I'm not sure what type of filtering you'd like. Let me show you the available options:",
-                           show_options=True,
-                           options=[
-                               ("🕐 Filter by Time", "I want to filter by time"),
-                               ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
-                               ("👤 Filter by Employee Name", "I want to filter by name"),
-                               ("🏢 Filter by Department", "I want to filter by department")
-                           ])
-           
-    def handle_time_filtering(self, user_input):
-        """Handle time filtering logic"""
-        start_time, end_time, filter_type = extract_time_range_and_type(user_input)
-        self.state['start_time'] = start_time
-        self.state['end_time'] = end_time
-        self.state['time_filter_type'] = filter_type
-        
-        if not start_time:
-            self.state['mode'] = 'awaiting_start'
-            self.add_message("I need the start time. Please tell me when you want the time range to begin.\n\nExamples: '9am', '09:00', '8:30am'")
-            self.status_label.config(text="⏰ Waiting for start time")
-            return
-            
-        if not end_time:
-            self.state['mode'] = 'awaiting_end'
-            self.add_message("I need the end time. Please tell me when you want the time range to end.\n\nExamples: '5pm', '17:00', '6:30pm'")
-            self.status_label.config(text="⏰ Waiting for end time")
-            return
-            
-        # Process complete request
-        self.filter_and_respond_time(start_time, end_time, filter_type)
-      
-    def handle_senior_filtering(self, user_input):
-        """Handle senior personnel filtering logic"""
-        user_input_lower = user_input.lower()
-        
-        if 'default' in user_input_lower or 'standard' in user_input_lower:
-            # Use default keywords
-            self.filter_and_respond_senior(None)
-        elif 'custom' in user_input_lower or 'specify' in user_input_lower:
-            self.add_message("Please specify the senior titles you want to search for, separated by commas.\n\nExample: 'manager, director, team lead, supervisor'")
-            self.status_label.config(text="⌨️ Waiting for custom titles")
-            self.state['mode'] = 'awaiting_custom_titles'
-        else:
-            # Try to extract keywords from the input
-            potential_keywords = self.extract_senior_keywords(user_input)
-            if potential_keywords:
-                self.filter_and_respond_senior(potential_keywords)
-            else:
-                # Use default if no specific keywords found
-                self.filter_and_respond_senior(None)
-                
-    def extract_senior_keywords(self, user_input):
-        """Extract potential senior keywords from user input"""
-        common_titles = ['manager', 'director', 'senior', 'vp', 'ceo', 'cfo', 'cto', 
-                        'supervisor', 'lead', 'head', 'chief', 'executive', 'president']
-        
-        # Normalize input and split using commas and 'and'
-        parts = re.split(r',|\band\b', user_input.lower())
-
-        found_keywords = []
-        for part in parts:
-            word = part.strip().rstrip('s')  # remove plural 's'
-            if word in common_titles:
-                found_keywords.append(word)
-        
-        return found_keywords if found_keywords else None
-    
-
-        
-    def handle_awaiting_start(self, user_input):
-        """Handle start time input"""
-        start_time = parse_time_string(user_input)
-        if not start_time:
-            self.add_message("I couldn't understand that time format. 😅\n\nPlease try formats like:\n• 9am\n• 09:00\n• 8:30am")
-            return
-            
-        self.state['start_time'] = start_time
-        if not self.state['end_time']:
-            self.state['mode'] = 'awaiting_end'
-            self.add_message(f"Got it! Start time: {start_time} ✅\n\nNow, what's the end time?")
-            self.status_label.config(text="⏰ Waiting for end time")
-            return
-            
-        self.filter_and_respond_time(self.state['start_time'], self.state['end_time'], self.state['time_filter_type'])
-        
-    def handle_awaiting_end(self, user_input):
-        """Handle end time input"""
-        end_time = parse_time_string(user_input)
-        if not end_time:
-            self.add_message("I couldn't understand that time format. 😅\n\nPlease try formats like:\n• 5pm\n• 17:00\n• 6:30pm")
-            return
-            
-        self.state['end_time'] = end_time
-        if not self.state['start_time']:
-            self.state['mode'] = 'awaiting_start'
-            self.add_message(f"Got it! End time: {end_time} ✅\n\nNow, what's the start time?")
-            self.status_label.config(text="⏰ Waiting for start time")
-            return
-            
-        self.filter_and_respond_time(self.state['start_time'], self.state['end_time'], self.state['time_filter_type'])
-    
-    def filter_and_respond_senior(self, custom_keywords=None):
-        try:
-            self.status_label.config(text="👔 Filtering for senior personnel...")
-            self.root.update()
-
-            # Use custom keywords if provided, otherwise default
-            if custom_keywords:
-                senior_titles = custom_keywords
-            else:
-                senior_titles = ['manager', 'senior', 'director', 'vp', 'cfo', 'ceo']
-
-            filtered_df = find_senior_personnel_entries(self.df, title_column='Title', senior_keywords=senior_titles)
-
-            if filtered_df.empty:
-                self.add_message("⚠️ No senior personnel records found with the given criteria.\nWould you like to try different titles?",
-                                show_options=True,
-                                options=[
-                                    ("🔄 Try default titles", "Use default senior titles"),
-                                    ("🔧 Specify custom titles", "I want to specify custom titles")
-                                ])
-                self.status_label.config(text="⚠️ No matches found")
-            else:
-                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_SeniorPersonnel.xlsx")
-                filtered_df.to_excel(output_file_path, index=False)
-
-                self.add_message(
-                    f"✅ Filter complete!\n\n"
-                    f"• Senior titles used: {', '.join(senior_titles)}\n"
-                    f"• Records found: {len(filtered_df)}\n"
-                    f"• Saved to: Filtered_SeniorPersonnel.xlsx\n\n"
-                    f"Want to apply another filter?",
-                    show_options=True,
-                    options=[
-                        ("🔄 Filter again", "I want to filter data again"),
-                        ("✨ New filter type", "I want different filtering")
-                    ]
-                )
-                self.status_label.config(text="✅ Filter completed successfully")
-
-        except Exception as e:
-            self.add_message(f"❌ Error during senior personnel filtering: {str(e)}")
-            self.status_label.config(text="❌ Error occurred")
-
-        # Reset for next task
         self.reset_state()
         self.state['mode'] = 'filter_selection'
         self.entry.focus_set()
 
-
-    def filter_and_respond_time(self, start_time, end_time, filter_type):
-        """Process the filtering and respond with results"""
-        try:
-            self.status_label.config(text="⚙️ Filtering data...")
-            self.root.update()
-            
-            filtered, err = filter_by_time_range(self.df, start_time, end_time, filter_type)
-            
-            if err:
-                self.add_message(f"❌ {err}")
-                self.status_label.config(text="❌ Error occurred")
-            elif filtered.empty:
-                self.add_message("⚠️ No records match your filter criteria.\n\nWould you like to try a different time range?",
-                               show_options=True,
-                               options=[("🔄 Try again", "I want to filter by time")])
-                self.status_label.config(text="⚠️ No results found")
-            else:
-                output_file_path = os.path.join(os.path.dirname(self.file_path), "FilteredOutput.xlsx")
-                filtered.to_excel(output_file_path, index=False)
-                
-                filter_desc = "inside" if filter_type == "inside" else "outside"
-                self.add_message(
-                    f"✅ Success! Filtered data saved!\n\n"
-                    f"📊 **Results Summary:**\n"
-                    f"• Time range: {start_time} to {end_time}\n"
-                    f"• Filter type: {filter_desc} time range\n"
-                    f"• Records found: {len(filtered)}\n"
-                    f"• File saved: FilteredOutput.xlsx\n\n"
-                    f"Would you like to perform another filter?",
-                    show_options=True,
-                    options=[
-                        ("🔄 Filter again", "I want to filter data again"),
-                        ("✨ New filter type", "I want different filtering")
-                    ]
-                )
-                self.status_label.config(text="✅ Filter completed successfully")
-                
-        except Exception as e:
-            self.add_message(f"❌ An error occurred: {str(e)}")
-            self.status_label.config(text="❌ Error occurred")
-            
-        # Reset state for next operation
-        self.reset_state()
-        self.state['mode'] = 'filter_selection'
-        self.entry.focus_set()
-        
     def run(self):
-        # Initial greeting with delay for better UX
         self.root.after(1500, lambda: self.add_message(
-            "👋 Hello! I'm your Smart Data Filter Assistant!\n\n"
-            "I can help you filter and analyze your data in multiple ways. "
-            "Just tell me what you're looking for, and I'll guide you through the process.\n\n"
-            "💡 **Try saying something like:**\n"
-            "• 'I want to filter by time'\n"
-            "• 'Show me data between 9am and 5pm'\n"
-            "• 'Filter employees by working hours'\n"
-            "• 'Help me filter data'"
+            "👋 Hello! I'm your Smart Filter Assistant!\n\n"
+            "I can help you filter and analyze your data for senior personnel. "
+            "Just tell me what titles or keywords you want to filter for (e.g., manager, director, cfo, accountant, etc.)."
         ))
-        
         self.entry.focus_set()
         self.root.mainloop()
 
@@ -784,3 +429,35 @@ def run_chatbot_ui():
 
 if __name__ == "__main__":
     run_chatbot_ui()
+
+def find_bypass_entries(df, columns_to_search=None, keywords=None):
+    """
+    Filters rows where text fields contain suspicious keywords like 'bypass', 'system change',
+    or variants such as 'bypassed', 'bypassing', 'system bypass', etc.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame.
+        columns_to_search (list): List of column names to scan.
+        keywords (list): List of suspicious keywords/phrases (case-insensitive, can be partial).
+
+    Returns:
+        pd.DataFrame: Rows matching any of the keywords/phrases.
+    """
+    if columns_to_search is None:
+        columns_to_search = ['Description', 'Title']
+    if keywords is None:
+        # Add more variants and suspicious phrases as needed
+        keywords = [
+            'bypass', 'bypassed', 'bypassing', 'system change', 'system bypass',
+            'bypass attempt', 'bypass code', 'bypass circuit', 'bypass relay'
+        ]
+
+    # Combine selected columns into a single lowercase string for search
+    df['__combined_text__'] = df[columns_to_search].fillna('').astype(str).agg(' '.join, axis=1).str.lower()
+
+    # Use regex to match any keyword as a whole word or phrase (case-insensitive)
+    pattern = '|'.join([re.escape(kw) for kw in keywords])
+    mask = df['__combined_text__'].str.contains(pattern, regex=True, case=False)
+
+    # Return matching rows, drop helper column
+    return df[mask].drop(columns='__combined_text__')
