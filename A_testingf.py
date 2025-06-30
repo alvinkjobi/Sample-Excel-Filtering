@@ -432,32 +432,22 @@ if __name__ == "__main__":
 
 def find_bypass_entries(df, columns_to_search=None, keywords=None):
     """
-    Filters rows where text fields contain suspicious keywords like 'bypass', 'system change',
-    or variants such as 'bypassed', 'bypassing', 'system bypass', etc.
+    Filters rows where any column contains the word 'bypass' (case-insensitive, substring match).
 
     Args:
         df (pd.DataFrame): Input DataFrame.
-        columns_to_search (list): List of column names to scan.
-        keywords (list): List of suspicious keywords/phrases (case-insensitive, can be partial).
+        columns_to_search (list): List of column names to scan. If None, checks all columns.
+        keywords (list): Ignored. Always checks for 'bypass'.
 
     Returns:
-        pd.DataFrame: Rows matching any of the keywords/phrases.
+        pd.DataFrame: Rows where any column contains 'bypass'.
     """
     if columns_to_search is None:
-        columns_to_search = ['Description', 'Title']
-    if keywords is None:
-        # Add more variants and suspicious phrases as needed
-        keywords = [
-            'bypass', 'bypassed', 'bypassing', 'system change', 'system bypass',
-            'bypass attempt', 'bypass code', 'bypass circuit', 'bypass relay'
-        ]
-
-    # Combine selected columns into a single lowercase string for search
-    df['__combined_text__'] = df[columns_to_search].fillna('').astype(str).agg(' '.join, axis=1).str.lower()
-
-    # Use regex to match any keyword as a whole word or phrase (case-insensitive)
-    pattern = '|'.join([re.escape(kw) for kw in keywords])
-    mask = df['__combined_text__'].str.contains(pattern, regex=True, case=False)
-
-    # Return matching rows, drop helper column
-    return df[mask].drop(columns='__combined_text__')
+        columns_to_search = df.columns.tolist()
+    valid_columns = [col for col in columns_to_search if col in df.columns]
+    if not valid_columns:
+        return pd.DataFrame(columns=df.columns)
+    mask = df[valid_columns].apply(
+        lambda col: col.astype(str).str.lower().str.contains('bypass', na=False)
+    ).any(axis=1)
+    return df[mask]

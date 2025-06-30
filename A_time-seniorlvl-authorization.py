@@ -327,6 +327,80 @@ def extract_authorization_statuses_from_input(user_input):
         if not any(w != other and w in other for other in found):
             final.append(w)
     return final if final else None
+def extract_bypass_statuses_from_input(user_input):
+    """
+    Extracts possible bypass statuses from user input using BYPASS_PATTERNS.
+    Returns a list of statuses or None.
+    """
+    BYPASS_PATTERNS = [
+        r'"([^"]+)"',
+        r'bypass\s+statuses?\s+containing\s+([^)]+)', 
+        # Match bypass statuses containing specific keywords
+        r'(?:entries\s+)?(?:with|having|showing)?\s*bypass\s+statuses?\s+([a-zA-Z0-9_\-\s,]+)',
+        # Comma-separated or 'and'/'or' separated list (e.g., bypassed, not_bypassed and bypassing)
+        r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)', 
+        # Match bypass statuses in lists
+        r'([a-zA-Z0-9_\-\s]+)'
+        # This pattern matches single words or phrases that may be bypass statuses
+    ]
+    default_keywords = [
+        'bypassed', 'not_bypassed', 'bypass', 'bypassing',
+        'system change', 'system bypass', 'bypass attempt'
+    ]
+    lowered = user_input.lower()
+    for pattern in BYPASS_PATTERNS:
+        match = re.findall(pattern, user_input, re.IGNORECASE)
+        if match:
+            if pattern == r'"([^"]+)"':
+                return [m.strip().lower() for m in match if m.strip()]
+            if pattern == r'bypass\s+statuses?\s+containing\s+([^)]+)':
+                titles_str = match[0]
+                parts = re.split(r',|\band\b|\bor\b', titles_str)
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'(?:entries\s+)?(?:with|having|showing)?\s*bypass\s+statuses?\s+([a-zA-Z0-9_\-\s,]+)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'([a-zA-Z0-9_\-\s]+)':
+                return [match[0].strip().lower()]
+    # If the input contains 'bypass' or any default keyword, return all defaults
+    if any(kw in lowered for kw in default_keywords):
+        return default_keywords
+    # Otherwise, try to extract keywords as before
+    parts = re.split(r',|\band\b|\bor\b', lowered)
+    found_keywords = []
+    for part in parts:
+        word = part.strip().rstrip('s')
+        if word in default_keywords:
+            found_keywords.append(word)
+    return found_keywords if found_keywords else None
+
+def find_bypass_entries(df, title_column='Description', bypass_keywords=None):
+    """
+    Filter entries to show only those where the Description column contains
+    ANY of the user-given bypass keywords (case-insensitive, substring match).
+    """
+    if not bypass_keywords:
+        return pd.DataFrame(columns=df.columns)
+    # Ensure all keywords are lowercased and stripped
+    if isinstance(bypass_keywords, str):
+        bypass_keywords = re.split(r',|\band\b|\bor\b', bypass_keywords, flags=re.IGNORECASE)
+        
+    else:
+        bypass_keywords = [kw.strip().lower() for kw in bypass_keywords if kw.strip()]
+
+    # Ensure the column exists
+    if title_column not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+    descriptions = df[title_column].fillna('').astype(str).str.lower()
+    # Only match if keyword is not empty and present in the description (substring)
+    pattern = '|'.join([re.escape(kw) for kw in bypass_keywords])
+    mask = descriptions.str.contains(pattern, case=False, na=False, regex=True)
+
+    return df[mask]
+
 
 
 class SmartFilterBot:
@@ -347,6 +421,7 @@ class SmartFilterBot:
             'time_filter_type': 'inside',
             'senior_keywords': None,
             'authorization_keywords': None,
+            'bypass_keywords': None,
         }
         
     def setup_window(self):
@@ -614,11 +689,52 @@ class SmartFilterBot:
             self.handle_senior_filtering(user_input)
         elif self.state['mode'] == 'Authorization_filtering':
             self.handle_authorization_filtering(user_input)
+        elif self.state['mode'] == 'bypass_filtering':
+            self.handle_bypass_filtering(user_input)
         elif self.state['mode'] == 'awaiting_start':
             self.handle_awaiting_start(user_input)
         elif self.state['mode'] == 'awaiting_end':
             self.handle_awaiting_end(user_input)
-            
+
+    def handle_bypass_filtering(self, user_input):
+        extracted_statuses = extract_bypass_statuses_from_input(user_input)
+        if extracted_statuses:
+            self.filter_and_respond_bypass(extracted_statuses)
+        else:
+            self.add_message("Please specify the bypass statuses you want to search for, separated by commas or using 'and/or'.\nExample: 'bypassed, not_bypassed'")
+            self.status_label.config(text="⌨️ Waiting for statuses")
+
+    def filter_and_respond_bypass(self, custom_keywords=None):
+        try:
+            self.status_label.config(text="🔒 Filtering for bypass statuses...")
+            self.root.update()
+            if custom_keywords:
+                bypass_titles = custom_keywords
+            else:
+                bypass_titles = ['bypassed', 'not_bypassed', 'bypass', 'bypassing',
+                                 'system change', 'system bypass', 'bypass attempt']
+            filtered_df = find_bypass_entries(self.df, title_column='Description', bypass_keywords=bypass_titles)
+            if filtered_df.empty:
+                self.add_message("⚠️ No bypass records found with the given criteria.\nWould you like to try different statuses?")
+                self.status_label.config(text="⚠️ No matches found")
+            else:
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_Bypass.xlsx")
+                filtered_df.to_excel(output_file_path, index=False)
+                self.add_message(
+                    f"✅ Filter complete!\n\n"
+                    f"• Bypass statuses used: {', '.join(bypass_titles)}\n"
+                    f"• Records found: {len(filtered_df)}\n"
+                    f"• Saved to: Filtered_Bypass.xlsx\n\n"
+                    f"Want to apply another filter?"
+                )
+                self.status_label.config(text="✅ Filter completed successfully")
+        except Exception as e:
+            self.add_message(f"❌ Error during bypass filtering: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+        self.reset_state()
+        self.state['mode'] = 'filter_selection'
+        self.entry.focus_set()
+
     def handle_initial_greeting(self, user_input):
 
         """Handle the initial conversation and determine filter type"""
@@ -652,8 +768,7 @@ class SmartFilterBot:
                     ("🕐 Filter by Time", "I want to filter by time"),
                     ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
                     ("👤 Filter by Authorized or Unauthorized", "I want to filter by Authorization Status"),
-                    ("🏢 Filter by Department", "I want to filter by department"),
-                    ("📈 Custom Filter", "I want different filtering")
+                    ("🔒 Filter by Bypass", "I want to filter by Bypass"),
                 ]
             )
             self.status_label.config(text="🤔 Waiting for filter type selection")
@@ -686,45 +801,6 @@ class SmartFilterBot:
                     f"• Authorization statuses used: {', '.join(authorization_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_Authorization.xlsx\n\n"
-                    f"Want to apply another filter?"
-                )
-                self.status_label.config(text="✅ Filter completed successfully")
-        except Exception as e:
-            self.add_message(f"❌ Error during authorization filtering: {str(e)}")
-            self.status_label.config(text="❌ Error occurred")
-        self.reset_state()
-        self.state['mode'] = 'filter_selection'
-        self.entry.focus_set()
-
-        try:
-            self.status_label.config(text="👔 Filtering for authorization...")
-            self.root.update()
-
-            # Use custom keywords if provided, otherwise default
-            if custom_keywords:
-                auth_titles = custom_keywords
-            else:
-                auth_titles = [ 'authorized', 'unauthorized', 'authorization', 'auth',        
-                                'permit', 'permission', 'access', 'clearance']
-
-            filtered_df = find_authorization_entries(self.df, title_column='Authorization Status', authorization_keywords=auth_titles)
-            if filtered_df.empty:
-                self.add_message("⚠️ No authorization records found with the given criteria.\nWould you like to try different titles?",
-                                show_options=True,
-                                options=[
-                                    ("🔄 Try default titles", "Use default Authorization titles"),
-                                    ("🔧 Specify custom titles", "I want to specify custom titles")
-                                ])
-                self.status_label.config(text="⚠️ No matches found")
-            else:
-                output_file_path = os.path.join(os.path.dirname(self.file_path), "Authorization.xlsx")
-                filtered_df.to_excel(output_file_path, index=False)
-
-                self.add_message(
-                    f"✅ Filter complete!\n\n"
-                    f"• Authorization titles used: {', '.join(auth_titles)}\n"
-                    f"• Records found: {len(filtered_df)}\n"
-                    f"• Saved to: Authorization.xlsx\n\n"
                     f"Want to apply another filter?",
                     show_options=True,
                     options=[
@@ -733,31 +809,13 @@ class SmartFilterBot:
                     ]
                 )
                 self.status_label.config(text="✅ Filter completed successfully")
-
         except Exception as e:
             self.add_message(f"❌ Error during authorization filtering: {str(e)}")
             self.status_label.config(text="❌ Error occurred")
-
-        # Reset for next task
         self.reset_state()
         self.state['mode'] = 'filter_selection'
         self.entry.focus_set()
 
-
-        """Extract potential authorization keywords from user input"""
-        common_titles = [ 'authorized', 'unauthorized', 'authorization', 'auth',
-                          'permit', 'permission', 'access', 'clearance']
-        
-        # Normalize input and split using commas and 'and'
-        parts = re.split(r',|\band\b', user_input.lower())
-
-        found_keywords = []
-        for part in parts:
-            word = part.strip().rstrip('s')  # remove plural 's'
-            if word in common_titles:
-                found_keywords.append(word)
-        return found_keywords if found_keywords else None
-    
     def handle_filter_selection(self, user_input):
         """Handle filter type selection"""
         if any(word in user_input.lower() for word in ['time', 'hour', 'shift', 'schedule']):
@@ -783,22 +841,18 @@ class SmartFilterBot:
                            options=[
                                ("✅ Use default search", "Use default Authorization titles"),
                            ])
-        elif any(word in user_input.lower() for word in ['name', 'employee']):
-            self.add_message("Employee name filtering is coming soon! 👤\n\nFor now, I can help you with time-based filtering or senior personnel filtering. Which would you prefer?",
+        elif any(word in user_input.lower() for word in ['bypass', 'bypassed', 'bypassing', 'system change']):
+            self.state['mode'] = 'bypass_filtering'
+            self.state['filter_type_selected'] = 'bypass'
+            self.status_label.config(text="🔒 Setting up bypass filter")
+            self.add_message("I can help you find entries related to bypass attempts or system changes. 🔒\n\nYou can tell me things like:\n• 'Show bypass attempts'\n• 'Filter system changes'\n\nWould you like to use the default search or specify custom keywords?",
                            show_options=True,
                            options=[
-                               ("🕐 Filter by time", "I want to filter by time"),
-                               ("👔 Filter senior personnel", "I want to filter senior personnel")
+                               ("✅ Use default search", "Use default bypass keywords"),
+                               ("🔧 Specify custom keywords", "I want to specify custom bypass keywords")
                            ])
-            self.status_label.config(text="🚧 Feature coming soon")
-        elif any(word in user_input.lower() for word in ['department', 'dept']):
-            self.add_message("Department filtering is coming soon! 🏢\n\nFor now, I can help you with time-based filtering or senior personnel filtering. Which would you prefer?",
-                           show_options=True,
-                           options=[
-                               ("🕐 Filter by time", "I want to filter by time"),
-                               ("👔 Filter senior personnel", "I want to filter senior personnel")
-                           ])
-            self.status_label.config(text="🚧 Feature coming soon")
+        
+        
         else:
             self.add_message("I'm not sure what type of filtering you'd like. Let me show you the available options:",
                            show_options=True,
@@ -806,7 +860,7 @@ class SmartFilterBot:
                                ("🕐 Filter by Time", "I want to filter by time"),
                                ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
                                ("👤 Filter by Authorization", "I want to filter by Authorization"),
-                               ("🏢 Filter by Department", "I want to filter by department")
+                               ("🔒 Filter by Bypass", "I want to filter by Bypass"),
                            ])
            
     def handle_time_filtering(self, user_input):
@@ -984,6 +1038,7 @@ class SmartFilterBot:
                 else:
                     filter_desc = "inside" if filter_type == "inside" else "outside"
                     time_range_desc = f"{start_time} to {end_time}"
+
 
                 self.add_message(
                     f"✅ Success! Filtered data saved!\n\n"
