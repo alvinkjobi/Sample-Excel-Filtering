@@ -206,42 +206,116 @@ def detect_filter_intent(user_input):
 
 # Patterns for extracting multiple titles from user input (comma, 'and', 'or', quoted, etc.)
 TITLE_PATTERNS = [
-    # Quoted titles: "Manager", "CFO"
+    # 1. Quoted titles
     r'"([^"]+)"',
-    # titles containing ... (comma, and, or separated)
-    r'titles?\s+containing\s+([^)]+)',
-    # Comma-separated or 'and'/'or' separated list (e.g., manager, cfo and accountant)
+
+    # 2. titles containing/including/with/having
+    r'titles?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)',
+
+    # 3. positions containing...
+    r'positions?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)',
+
+    # 4. title/role/position is = :
+    r'(?:title|role|position)\s*(?:is|=|:)?\s*([a-zA-Z0-9\s]+)',
+
+    # 5. title is one of...
+    r'(?:title|role|position)\s+is\s+(?:one of|among)\s+([a-zA-Z0-9\s,]+)',
+
+    # 6. done/entered by <title>
+    r'(?:done|entered|approved|submitted)\s+by\s+([a-zA-Z0-9\s,]+)',
+
+    # 7. entries/records/transactions/logs by ...
+    r'(?:entries|records|transactions|logs)?\s*(?:made|entered|created|done)?\s*by\s+([a-zA-Z0-9\s,]+)',
+
+    # 8. show/filter/get including roles like ...
+    r'(?:show|filter|get|list)\s+(?:entries\s+)?(?:including|by|for)?\s*(?:roles?|titles?|positions?)?\s*(?:like)?\s*([a-zA-Z0-9\s,]+)',
+
+    # 9. Question phrasing: "Who did this? CFO?"
+    r'who\s+(?:made|entered|did|submitted)[^?]*\??.*?\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
+
+    # 10. Casual: "By CFO right?", "CEO did it?"
+    r'\b(?:by|from)\s+(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
+
+    # 11. Loose list with or/and
     r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
-    # Single word fallback
-    r'([a-zA-Z0-9\s]+)'
+
+    # 12. Imperative: "Only CFO", "Just CEO"
+    r'(?:only|just)\s+([a-zA-Z0-9\s]+)',
+
+    # 13. Exclusion
+    r'(?:exclude|don\'?t\s+show|remove)\s+([a-zA-Z0-9\s,]+)',
+
+    # 14. Basic match with "entries by"
+    r'entries\s+by\s+([a-zA-Z0-9\s,]+)',
+
+    # 15. Match embedded in questions
+    r'entries.*\b(?:by|from)\b.*\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
+
+    # 16. Conversations: "Anyone from finance manager?", "Entries done by CEO right?"
+    r'(?:anyone\s+from|entries\s+(?:done|made)\s+by)\s+([a-zA-Z0-9\s]+)',
+
+    # 17. Embedded inside longer condition: “after 5pm by CEO”
+    r'after\s+\d+(?::\d+)?\s*(?:am|pm)?\s+by\s+([a-zA-Z0-9\s]+)',
+
+    # 18. Fallback: exact known titles anywhere in text
+    r'\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b'
 ]
+
 
 def extract_titles_from_input(user_input):
     """
     Extracts possible titles from user input using TITLE_PATTERNS.
     Returns a list of titles or None.
     """
+    multi_word_titles = [
+        "senior accountant", "junior accountant", "finance manager"
+    ]
+    # Lowercase input for easier matching
+    lowered_input = user_input.lower()
+    # First, extract all multi-word titles as phrases
+    found = []
+    temp_input = lowered_input
+    for title in multi_word_titles:
+        if title in temp_input:
+            found.append(title)
+            # Remove matched multi-word title to avoid splitting it later
+            temp_input = temp_input.replace(title, " ")
+    # Now, apply patterns to the remaining input (without multi-word titles)
     for pattern in TITLE_PATTERNS:
-        match = re.findall(pattern, user_input, re.IGNORECASE)
+        match = re.findall(pattern, temp_input, re.IGNORECASE)
         if match:
             # If quoted, match is already a list
             if pattern == r'"([^"]+)"':
-                return [m.strip().lower() for m in match if m.strip()]
+                found += [m.strip().lower() for m in match if m.strip()]
+            #if not quoted, match is a single string
+            elif pattern == r'(?:title|role|position)\s*(?:is|=|:)?\s*([a-zA-Z0-9\s]+)':
+                # Match single title/role/position
+                found += [match[0].strip().lower()]
             # If 'titles containing ...'
-            if pattern == r'titles?\s+containing\s+([^)]+)':
+            elif pattern == r'titles?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)':
                 titles_str = match[0]
                 parts = re.split(r',|\band\b|\bor\b', titles_str)
-                return [p.strip().lower() for p in parts if p.strip()]
+                found += [p.strip().lower() for p in parts if p.strip()]
             # If comma/and/or separated
-            if pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
+            elif pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
                 parts = re.split(r',|\band\b|\bor\b', match[0])
-                return [p.strip().lower() for p in parts if p.strip()]
+                found += [p.strip().lower() for p in parts if p.strip()]
             # Single word fallback
-            if pattern == r'([a-zA-Z0-9\s]+)':
-                return [match[0].strip().lower()]
-    return None
+            elif pattern == r'([a-zA-Z0-9\s]+)':
+                found += [match[0].strip().lower()]
+            # Stop after first match to avoid duplicates
+            if found:
+                break
+    # Remove duplicates while preserving order
+    seen = set()
+    result = []
+    for t in found:
+        if t and t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result if result else None
 
-#Authorization patterns for extracting multiple keywords from user input (comma, 'and', 'or', quoted, etc.)
+#Authorization patternsfor extracting multiple keywords from user input (comma, 'and', 'or', quoted, etc.)
 def find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=None):
     """
     Filter entries to show only those where the Title column contains
@@ -282,13 +356,7 @@ def extract_authorization_statuses_from_input(user_input):
     - "authorization statuses containing ..."
     - quoted, comma/and/or separated, etc.
     """
-    AUTHORIZATION_PATTERNS = [
-        r'"([^"]+)"',
-        r'authorization\s+statuses?\s+containing\s+([^)]+)',
-        r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?',
-        r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
-        r'([a-zA-Z0-9\s]+)'
-    ]
+    
     for pattern in AUTHORIZATION_PATTERNS:
         match = re.findall(pattern, user_input, re.IGNORECASE)
         if match:
@@ -334,20 +402,37 @@ def extract_bypass_statuses_from_input(user_input):
     """
     BYPASS_PATTERNS = [
         r'"([^"]+)"',
-        r'bypass\s+statuses?\s+containing\s+([^)]+)', 
-        # Match bypass statuses containing specific keywords
+        r'bypass\s+statuses?\s+containing\s+([^)]+)',
         r'(?:entries\s+)?(?:with|having|showing)?\s*bypass\s+statuses?\s+([a-zA-Z0-9_\-\s,]+)',
-        # Comma-separated or 'and'/'or' separated list (e.g., bypassed, not_bypassed and bypassing)
-        r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)', 
-        # Match bypass statuses in lists
+        r'entries\s+bypassing\s+standard\s+processes.*?(?:look\s+for\s+keywords\s+like\s+)?([\'"]?[\w\s,]+[\'"]?)',
+        r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)',
         r'([a-zA-Z0-9_\-\s]+)'
-        # This pattern matches single words or phrases that may be bypass statuses
     ]
     default_keywords = [
         'bypassed', 'not_bypassed', 'bypass', 'bypassing',
         'system change', 'system bypass', 'bypass attempt'
     ]
     lowered = user_input.lower()
+    # Special handling for the default phrase (robust for variations)
+    if "entries bypassing standard processes" in lowered or "bypassing standard processes" in lowered:
+        # Look for: (look for keywords like 'bypass' or 'system change')
+        match = re.search(r"look\s*for\s*keywords\s*like\s*\(([^)]*)\)", lowered)
+        if match:
+            keywords_str = match.group(1)
+            # Extract all quoted keywords (single or double quotes)
+            quoted_keywords = re.findall(r"'([^']+)'|\"([^\"]+)\"", keywords_str)
+            keywords = []
+            for q1, q2 in quoted_keywords:
+                kw = q1 if q1 else q2
+                if kw:
+                    keywords.append(kw.strip().lower())
+            # If no quoted keywords, fallback to splitting by comma/or/and
+            if not keywords:
+                parts = re.split(r',|\bor\b|\band\b', keywords_str)
+                keywords = [p.strip().lower() for p in parts if p.strip()]
+            return keywords if keywords else default_keywords
+        # If no explicit keywords, use default
+        return default_keywords
     for pattern in BYPASS_PATTERNS:
         match = re.findall(pattern, user_input, re.IGNORECASE)
         if match:
@@ -360,12 +445,23 @@ def extract_bypass_statuses_from_input(user_input):
             if pattern == r'(?:entries\s+)?(?:with|having|showing)?\s*bypass\s+statuses?\s+([a-zA-Z0-9_\-\s,]+)':
                 parts = re.split(r',|\band\b|\bor\b', match[0])
                 return [p.strip().lower() for p in parts if p.strip()]
-            if pattern == r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)':
-                parts = re.split(r',|\band\b|\bor\b', match[0])
+            if pattern == r'entries\s+bypassing\s+standard\s+processes.*?(?:look\s+for\s+keywords\s+like\s+)?([\'"]?[\w\s,]+[\'"]?)':
+                keywords_str = match[0]
+                keywords_str = keywords_str.replace("'", "").replace('"', "")
+                parts = re.split(r',|\bor\b|\band\b', keywords_str)
                 return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)':
+                val = match[0].strip()
+                if re.search(r',|\band\b|\bor\b', val, re.IGNORECASE):
+                    parts = re.split(r',|\band\b|\bor\b', val)
+                    return [p.strip().lower() for p in parts if p.strip()]
+                else:
+                    return [val.lower()]
             if pattern == r'([a-zA-Z0-9_\-\s]+)':
-                return [match[0].strip().lower()]
-    # If the input contains 'bypass' or any default keyword, return all defaults
+                single = match[0].strip().lower()
+                if single:
+                    return [single]
+    # If the input contains any default keyword as a whole word or substring, return all defaults
     if any(kw in lowered for kw in default_keywords):
         return default_keywords
     # Otherwise, try to extract keywords as before
@@ -395,9 +491,10 @@ def find_bypass_entries(df, title_column='Description', bypass_keywords=None):
     if title_column not in df.columns:
         return pd.DataFrame(columns=df.columns)
     descriptions = df[title_column].fillna('').astype(str).str.lower()
-    # Only match if keyword is not empty and present in the description (substring)
-    pattern = '|'.join([re.escape(kw) for kw in bypass_keywords])
-    mask = descriptions.str.contains(pattern, case=False, na=False, regex=True)
+    # Fix: match each keyword as a substring, not as a regex word boundary
+    mask = descriptions.apply(
+        lambda desc: any(kw in desc for kw in bypass_keywords if kw)
+    )
 
     return df[mask]
 
@@ -827,19 +924,19 @@ class SmartFilterBot:
             self.state['mode'] = 'senior_filtering'
             self.state['filter_type_selected'] = 'senior'
             self.status_label.config(text="👔 Setting up senior personnel filter")
-            self.add_message("Excellent! I'll help you filter for senior personnel. 👔\n\nI can find employees with titles like:\n• Managers\n• Directors\n• VPs, CEOs, CFOs\n• Senior-level positions\n• Executive roles\n\nWould you like me to use the default search or specify custom titles?",
+            self.add_message("Excellent! I'll help you filter for entries entered by senior personnel. 👔\n\nYou can ask me things like:\n• 'Entries entered by senior personnel'\n• 'Show entries with titles containing \"Manager\", \"Senior\", \"Director\", \"VP\", \"CFO\", or \"CEO\"'\n• 'Filter based on executive roles or leadership titles'\n• Comma/and/or-separated titles like 'Manager, Director and VP'\n• Quoted titles like '\"CFO\"' or '\"Senior Analyst\"'\n\nWould you like to use the default titles or specify your own?",
                            show_options=True,
                            options=[
-                               ("✅ Use default search", "Use default senior titles"),
+                               ("✅ Use default search", "Entries entered by senior personnel (titles containing \"Manager\", \"Senior\", \"Director\", \"VP\", \"CFO\", or \"CEO\")."),
                                ])
         elif any(word in user_input.lower() for word in ['authorization', 'authorized', 'unauthorized', 'auth']):
             self.state['mode'] = 'Authorization_filtering'
             self.state['filter_type_selected'] = 'Authorization'
             self.status_label.config(text="👔 Setting up Authorization filter")
-            self.add_message("Great! I'll help you filter by Authorization Status. 👔\n\nYou can tell me things like:\n• 'Show only authorized personnel'\n• 'Filter out unauthorized entries'\n\nWould you like to use the default search or specify custom titles?",
+            self.add_message("Great! I'll help you filter by Authorization Status. 👔\n\nYou can ask me things like:\n• 'Entered by unauthorized users'\n• 'Entries by unauthorized users'\n• 'Entries entered by unauthorized users'\n\nWould you like to use the default search or specify custom titles?",
                            show_options=True,
                            options=[
-                               ("✅ Use default search", "Use default Authorization titles"),
+                               ("✅ Use default search", "Entries entered by unauthorized users"),
                            ])
         elif any(word in user_input.lower() for word in ['bypass', 'bypassed', 'bypassing', 'system change']):
             self.state['mode'] = 'bypass_filtering'
@@ -848,8 +945,7 @@ class SmartFilterBot:
             self.add_message("I can help you find entries related to bypass attempts or system changes. 🔒\n\nYou can tell me things like:\n• 'Show bypass attempts'\n• 'Filter system changes'\n\nWould you like to use the default search or specify custom keywords?",
                            show_options=True,
                            options=[
-                               ("✅ Use default search", "Use default bypass keywords"),
-                               ("🔧 Specify custom keywords", "I want to specify custom bypass keywords")
+                               ("✅ Use default search", "Entries bypassing standard processes (look for keywords like 'bypass' or 'system change' )")
                            ])
         
         
@@ -1071,11 +1167,7 @@ class SmartFilterBot:
             "👋 Hello! I'm your Smart Filter Assistant!\n\n"
             "I can help you filter and analyze your data in multiple ways. "
             "Just tell me what you're looking for, and I'll guide you through the process.\n\n"
-            "💡 **Try saying something like:**\n"
-            "• 'I want to filter by time'\n"
-            "• 'Show me data between 9am and 5pm'\n"
-            "• 'Filter employees by working hours'\n"
-            "• 'Help me filter data'"
+            
         ))
         
         self.entry.focus_set()
