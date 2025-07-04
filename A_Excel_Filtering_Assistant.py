@@ -180,7 +180,16 @@ def detect_filter_intent(user_input):
     # Authorization keywords
     authorization_keywords = ['authorized', 'unauthorized', 'authorization', 'auth', 
                              'permit', 'permission', 'access', 'clearance']
+    #bypass keywords
+    bypass_keywords = ['bypass', 'override', 'ignore', 'disregard','system change', 'system bypass', 'bypass attempt']
     # Check for time patterns
+    abnormal_entries=['fraud', 'error', 'suspense', 'reversal', 'manual']
+
+    sensitive_accounts = ['revenue', 'reserves', 'accruals']
+
+    finish=['quit'  ]
+
+
     time_patterns = [
         r'\d{1,2}(?::\d{2})?\s*(?:am|pm)',           # '9 am', '10:30pm'
         r'\d{1,2}:\d{2}',                            # '14:30'
@@ -194,14 +203,25 @@ def detect_filter_intent(user_input):
     has_time_pattern = any(re.search(pattern, user_input, re.IGNORECASE) for pattern in time_patterns)
     has_senior_keywords = any(keyword in user_input for keyword in senior_keywords)
     has_authorization_keywords = any(keyword in user_input for keyword in authorization_keywords)   
-    
+    has_bypass_keywords = any(keyword in user_input for keyword in bypass_keywords)
+    has_abnormal_entries = any(keyword in user_input for keyword in abnormal_entries)
+    has_finish = any(keyword in user_input for keyword in finish)
+    has_sensitive_accounts = any(keyword in user_input for keyword in sensitive_accounts)
     if has_time_keywords or has_time_pattern:
         return 'time'
     elif has_senior_keywords:
         return 'senior'
     elif has_authorization_keywords:
         return 'Authorization'
-    
+    elif has_bypass_keywords:
+        return 'Bypass'
+    elif has_abnormal_entries:
+        return 'Abnormal'
+    elif has_sensitive_accounts:
+        return 'Sensitive'
+    elif has_finish:
+        quit()
+
     return 'unknown'
 
 # Patterns for extracting multiple titles from user input (comma, 'and', 'or', quoted, etc.)
@@ -340,10 +360,12 @@ AUTHORIZATION_PATTERNS = [
     r'"([^"]+)"',
     r'authorization\s+statuses?\s+containing\s+([^)]+)',
     r'(?:entries\s+)?(?:entered\s+by|by)\s+([a-zA-Z0-9\s]+?)\s+users?',
+    #command :show authorized users
+    r'(?:show|filter|get|list)\s+(?:entries\s+)?(?:including|by|for)?\s*(?:authorized\s+)?users?\s*(?:like)?\s*([a-zA-Z0-9\s,]+)',
+    r'(?:show|filter|get|list)\s+([a-zA-Z0-9\s,]+)',
     r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
     r'([a-zA-Z0-9\s]+)'
 ]
-
 
 def extract_authorization_statuses_from_input(user_input):
     """
@@ -395,6 +417,7 @@ def extract_authorization_statuses_from_input(user_input):
         if not any(w != other and w in other for other in found):
             final.append(w)
     return final if final else None
+
 def extract_bypass_statuses_from_input(user_input):
     """
     Extracts possible bypass statuses from user input using BYPASS_PATTERNS.
@@ -405,7 +428,12 @@ def extract_bypass_statuses_from_input(user_input):
         r'bypass\s+statuses?\s+containing\s+([^)]+)',
         r'(?:entries\s+)?(?:with|having|showing)?\s*bypass\s+statuses?\s+([a-zA-Z0-9_\-\s,]+)',
         r'entries\s+bypassing\s+standard\s+processes.*?(?:look\s+for\s+keywords\s+like\s+)?([\'"]?[\w\s,]+[\'"]?)',
-        r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)',
+        r'(?:bypass|system\s+change)\s+(?:involving|related\s+to|including)\s+([a-zA-Z0-9_\-\s,]+)',
+        r'keywords\s+(?:such\s+as|like|including)\s+([a-zA-Z0-9_\-\s,]+)',
+        # Add patterns for "show bypass attempts" and similar
+        r'\bshow\s+([a-zA-Z0-9_\-\s]+?)(?:\s+attempts)?\b',
+        r'\bfilter\s+([a-zA-Z0-9_\-\s]+?)(?:\s+attempts)?\b',
+        r'\b([a-zA-Z0-9_\-\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9_\-\s,]*)\b',
         r'([a-zA-Z0-9_\-\s]+)'
     ]
     default_keywords = [
@@ -415,27 +443,25 @@ def extract_bypass_statuses_from_input(user_input):
     lowered = user_input.lower()
     # Special handling for the default phrase (robust for variations)
     if "entries bypassing standard processes" in lowered or "bypassing standard processes" in lowered:
-        # Look for: (look for keywords like 'bypass' or 'system change')
         match = re.search(r"look\s*for\s*keywords\s*like\s*\(([^)]*)\)", lowered)
         if match:
             keywords_str = match.group(1)
-            # Extract all quoted keywords (single or double quotes)
             quoted_keywords = re.findall(r"'([^']+)'|\"([^\"]+)\"", keywords_str)
             keywords = []
             for q1, q2 in quoted_keywords:
                 kw = q1 if q1 else q2
                 if kw:
                     keywords.append(kw.strip().lower())
-            # If no quoted keywords, fallback to splitting by comma/or/and
             if not keywords:
                 parts = re.split(r',|\bor\b|\band\b', keywords_str)
                 keywords = [p.strip().lower() for p in parts if p.strip()]
             return keywords if keywords else default_keywords
-        # If no explicit keywords, use default
         return default_keywords
+    # Try all patterns
     for pattern in BYPASS_PATTERNS:
         match = re.findall(pattern, user_input, re.IGNORECASE)
         if match:
+            # If quoted
             if pattern == r'"([^"]+)"':
                 return [m.strip().lower() for m in match if m.strip()]
             if pattern == r'bypass\s+statuses?\s+containing\s+([^)]+)':
@@ -450,13 +476,24 @@ def extract_bypass_statuses_from_input(user_input):
                 keywords_str = keywords_str.replace("'", "").replace('"', "")
                 parts = re.split(r',|\bor\b|\band\b', keywords_str)
                 return [p.strip().lower() for p in parts if p.strip()]
-            if pattern == r'([a-zA-Z0-9_\-\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9_\-\s,]*)':
-                val = match[0].strip()
-                if re.search(r',|\band\b|\bor\b', val, re.IGNORECASE):
+            if pattern == r'(?:bypass|system\s+change)\s+(?:involving|related\s+to|including)\s+([a-zA-Z0-9_\-\s,]+)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            if pattern == r'keywords\s+(?:such\s+as|like|including)\s+([a-zA-Z0-9_\-\s,]+)':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
+            # For "show bypass attempts" or "filter bypass attempts"
+            if pattern in [r'\bshow\s+([a-zA-Z0-9_\-\s]+?)(?:\s+attempts)?\b', r'\bfilter\s+([a-zA-Z0-9_\-\s]+?)(?:\s+attempts)?\b']:
+                val = match[0].strip().lower()
+                # If multiple words, split by comma/and/or
+                if re.search(r',|\band\b|\bor\b', val):
                     parts = re.split(r',|\band\b|\bor\b', val)
                     return [p.strip().lower() for p in parts if p.strip()]
                 else:
-                    return [val.lower()]
+                    return [val]
+            if pattern == r'\b([a-zA-Z0-9_\-\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9_\-\s,]*)\b':
+                parts = re.split(r',|\band\b|\bor\b', match[0])
+                return [p.strip().lower() for p in parts if p.strip()]
             if pattern == r'([a-zA-Z0-9_\-\s]+)':
                 single = match[0].strip().lower()
                 if single:
@@ -496,6 +533,190 @@ def find_bypass_entries(df, title_column='Description', bypass_keywords=None):
         lambda desc: any(kw in desc for kw in bypass_keywords if kw)
     )
 
+    return df[mask]
+
+ABNORMAL_PATTERNS = [
+    # 1. Quoted: "fraud", "error"
+    r'"([^"]+)"',
+
+    # 2. Phrases like: entries with fraud, error and manual
+    r'(?:entries|transactions|records|logs)?\s*(?:with|containing|including|showing|having)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+
+    # 3. Filters like: filter for fraud or manual
+    r'(?:filter|show|get|list)\s+(?:entries\s+)?(?:for|with|by)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+
+    # 4. Keywords mentioned directly
+    r'\b(fraud|error|suspense|reversal|manual)\b',
+
+    # 5. Just comma-or-and-separated fallback
+    r'([a-zA-Z0-9\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)'
+]
+def extract_abnormal_keywords_from_input(user_input):
+    """
+    Extracts abnormal entry keywords from user input using robust patterns.
+    Supports:
+    - show entries with <keywords>
+    - show entries with <keywords> and <keywords>
+    - show entries with <keywords>, <keywords> and <keywords>
+    - get <keyword> entries
+    """
+    lowered_input = user_input.lower()
+    found = []
+
+    # Pattern: show entries with <keywords> (comma/and/or separated)
+    match = re.search(r"show\s+entries\s+with\s+([a-zA-Z0-9\s,]+)", lowered_input)
+    if match:
+        keywords_str = match.group(1)
+        parts = re.split(r',|\band\b|\bor\b', keywords_str)
+        found += [p.strip().lower() for p in parts if p.strip()]
+
+    # Pattern: get <keyword> entries
+    if not found:
+        match = re.search(r"get\s+([a-zA-Z0-9\s]+?)\s+entries", lowered_input)
+        if match:
+            keywords_str = match.group(1)
+            parts = re.split(r',|\band\b|\bor\b', keywords_str)
+            found += [p.strip().lower() for p in parts if p.strip()]
+
+    # Fallback to previous patterns if nothing found
+    if not found:
+        ABNORMAL_PATTERNS = [
+            r'"([^"]+)"',
+            r'(?:entries|transactions|records|logs)?\s*(?:with|containing|including|showing|having)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+            r'(?:filter|show|get|list)\s+(?:entries\s+)?(?:for|with|by)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+            r'\b(fraud|error|suspense|reversal|manual)\b',
+            r'([a-zA-Z0-9\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)'
+        ]
+        for pattern in ABNORMAL_PATTERNS:
+            match = re.findall(pattern, lowered_input, re.IGNORECASE)
+            if match:
+                if isinstance(match[0], str):
+                    parts = re.split(r',|\band\b|\bor\b', match[0])
+                    found += [p.strip().lower() for p in parts if p.strip()]
+                else:
+                    found += [m.strip().lower() for m in match if m.strip()]
+                if found:
+                    break
+
+    # Deduplicate while preserving order
+    seen = set()
+    result = []
+    for word in found:
+        if word not in seen:
+            seen.add(word)
+            result.append(word)
+
+    return result if result else None
+def find_abnormal_entries(df, column='Description', abnormal_keywords=None):
+    """
+    Filters rows where any abnormal keyword appears in the Description column.
+    """
+    if not abnormal_keywords:
+        return pd.DataFrame(columns=df.columns)
+    
+    # Normalize keywords
+    abnormal_keywords = [kw.strip().lower() for kw in abnormal_keywords if kw.strip()]
+    descriptions = df[column].fillna('').astype(str).str.lower()
+
+    # Match any abnormal keyword
+    mask = descriptions.apply(lambda x: any(kw in x for kw in abnormal_keywords))
+    return df[mask]
+
+SENSITIVE_PATTERNS = [
+    # 1. Quoted: "revenue", "reserves"
+    r'"([^"]+)"',
+
+    # 2. entries to sensitive accounts
+    r'(?:entries|transactions|records|logs)?\s*(?:to|under|for)?\s*(?:sensitive\s+accounts\s*(?:like|including|such\s+as)?\s*)?([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+
+    # 3. filters like: show revenue and accruals entries
+    r'(?:filter|show|get|list)\s+(?:entries\s+)?(?:to|under|for)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+
+    # 4. Directly match sensitive account names
+    r'\b(revenue|reserves|accruals)\b',
+
+    # 5. Fallback loose match
+    r'([a-zA-Z0-9\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)'
+]
+def extract_sensitive_keywords_from_input(user_input):
+    lowered_input = user_input.lower()
+    found = []
+
+    # Pattern: filter/show/get/list <keywords> (comma/and/or separated)
+    match = re.search(r"(?:filter|show|get|list)\s+([a-zA-Z0-9\s,]+)", lowered_input)
+    if match:
+        keywords_str = match.group(1)
+        # Remove trailing 'entries' if present
+        keywords_str = re.sub(r'\s+entries$', '', keywords_str)
+        # Split by comma, 'and', or 'or'
+        parts = re.split(r',|\band\b|\bor\b', keywords_str)
+        found += [p.strip().lower() for p in parts if p.strip()]
+
+    # Pattern: entries to sensitive accounts like/including <keywords>
+    if not found:
+        match = re.search(r"(?:entries|transactions)?\s*(?:to|under|for)?\s*sensitive\s+accounts\s*(?:like|such\s+as)?\s*([a-zA-Z0-9\s,]+)", lowered_input)
+        if match:
+            keywords_str = match.group(1)
+            parts = re.split(r',|\band\b|\bor\b', keywords_str)
+            found += [p.strip().lower() for p in parts if p.strip()]
+
+    # Fallback to previous patterns if nothing found
+    if not found:
+        SENSITIVE_PATTERNS = [
+            r'"([^"]+)"',
+            r'(?:entries|transactions|records|logs)?\s*(?:to|under|for)?\s*(?:sensitive\s+accounts\s*(?:like|including|such\s+as)?\s*)?([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+            r'(?:filter|show|get|list)\s+(?:entries\s+)?(?:to|under|for)?\s*([a-zA-Z0-9\s,]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)',
+            r'\b(revenue|reserves|accruals)\b',
+            r'([a-zA-Z0-9\s]+(?:,\s*|\s+and\s+|\s+or\s+)[a-zA-Z0-9\s,]*)'
+        ]
+        for pattern in SENSITIVE_PATTERNS:
+            match = re.findall(pattern, lowered_input, re.IGNORECASE)
+            if match:
+                if isinstance(match[0], str):
+                    parts = re.split(r',|\band\b|\bor\b', match[0])
+                    found += [p.strip().lower() for p in parts if p.strip()]
+                else:
+                    found += [m.strip().lower() for m in match if m.strip()]
+                if found:
+                    break
+
+    # Deduplicate and return
+    seen = set()
+    result = []
+    for word in found:
+        if word not in seen:
+            seen.add(word)
+            result.append(word)
+
+    return result if result else None
+def find_sensitive_entries(df, column='Account Name', sensitive_keywords=None):
+    """
+    Filters rows where any sensitive keyword appears in the Account Name column.
+    """
+    if not sensitive_keywords:
+        return pd.DataFrame(columns=df.columns)
+    
+    sensitive_keywords = [kw.strip().lower() for kw in sensitive_keywords if kw.strip()]
+    account_names = df[column].fillna('').astype(str).str.lower()
+
+    mask = account_names.apply(lambda x: any(kw in x for kw in sensitive_keywords))
+    return df[mask]
+
+def find_vague_or_blank_descriptions(df, column='Description', vague_keywords=None):
+    """
+    Filters rows where the description is:
+    - Blank ("" or only whitespace)
+    - NaN
+    - Contains vague terms like 'na', 'misc', etc.
+    """
+    vague_keywords = vague_keywords or ['n/a', 'not available', 'unknown']
+
+    descriptions = df[column].fillna('').astype(str).str.strip().str.lower()
+
+    is_blank = descriptions == ''
+    is_vague = descriptions.apply(lambda desc: any(vague in desc for vague in vague_keywords))
+
+    mask = is_blank | is_vague
     return df[mask]
 
 
@@ -788,10 +1009,161 @@ class SmartFilterBot:
             self.handle_authorization_filtering(user_input)
         elif self.state['mode'] == 'bypass_filtering':
             self.handle_bypass_filtering(user_input)
+        elif self.state['mode'] == 'abnormal_filtering':
+            self.handle_abnormal_filtering(user_input)
+        elif self.state['mode'] == 'sensitive_filtering':
+            self.handle_sensitive_filtering(user_input)
+        elif self.state['mode'] == 'vague_description_filtering':
+            self.handle_vague_description_filtering(user_input)
         elif self.state['mode'] == 'awaiting_start':
             self.handle_awaiting_start(user_input)
         elif self.state['mode'] == 'awaiting_end':
             self.handle_awaiting_end(user_input)
+    
+    def handle_vague_description_filtering(self, user_input):
+        """Handles filtering for blank or vague descriptions."""
+        user_input_lower = user_input.lower()
+
+        vague_phrases = [
+            "blank descriptions",
+            "missing descriptions",
+            "no description",
+            "empty description",
+            "entries with vague descriptions",
+            "description is na",
+            "description is empty",
+            "description not available"
+        ]
+
+        if any(phrase in user_input_lower for phrase in vague_phrases):
+            self.filter_and_respond_vague()
+        else:
+            self.add_message("Do you want to filter entries with vague or missing descriptions?")
+            self.status_label.config(text="🤔 Waiting for confirmation")
+            self.state['mode'] = 'awaiting_vague_description_confirmation'
+
+    def filter_and_respond_vague(self):
+        try:
+            self.status_label.config(text="🔍 Filtering for vague or blank descriptions...")
+            self.root.update()
+
+            vague_terms = ['n/a', 'not available', 'unknown']
+            filtered_df = find_vague_or_blank_descriptions(self.df, column='Description', vague_keywords=vague_terms)
+
+            if filtered_df.empty:
+                self.add_message("⚠️ No entries found with blank or vague descriptions.")
+                self.status_label.config(text="⚠️ No matches found")
+            else:
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_VagueDescriptions.xlsx")
+                filtered_df.to_excel(output_file_path, index=False)
+
+                self.add_message(
+                    f"✅ Filter complete!\n\n"
+                    f"• Criteria: Blank or vague descriptions\n"
+                    f"• Records found: {len(filtered_df)}\n"
+                    f"• Saved to: Filtered_VagueDescriptions.xlsx\n\n"
+                    f"Would you like to apply another filter?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Filter again", "I want to filter data again"),
+                        ("✨ New filter type", "I want different filtering")
+                    ]
+                )
+                self.status_label.config(text="✅ Filter completed successfully")
+
+        except Exception as e:
+            self.add_message(f"❌ Error during vague description filtering: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+
+        self.reset_state()
+        self.state['mode'] = 'filter_selection'
+        self.entry.focus_set()
+
+
+    def handle_sensitive_filtering(self, user_input):
+        """Handles filtering for sensitive account entries."""
+        user_input_lower = user_input.lower()
+
+        default_keywords = ['revenue', 'reserves', 'accruals']
+        default_phrases = [
+            "sensitive accounts",
+            "entries to sensitive accounts",
+            "transactions under reserves",
+            "default sensitive search",
+            "use default sensitive accounts",
+            "default search",
+            "default"
+        ]
+
+        if any(phrase in user_input_lower for phrase in default_phrases):
+            self.filter_and_respond_sensitive(default_keywords)
+            return
+
+        extracted_keywords = extract_sensitive_keywords_from_input(user_input)
+        if extracted_keywords:
+            self.filter_and_respond_sensitive(extracted_keywords)
+            return
+
+        if (
+            'standard' in user_input_lower or
+            any(kw in user_input_lower for kw in default_keywords)
+        ):
+            self.filter_and_respond_sensitive(default_keywords)
+        elif 'custom' in user_input_lower or 'specify' in user_input_lower:
+            self.add_message("Please specify the sensitive accounts to search for (e.g., 'Revenue, Reserves').")
+            self.status_label.config(text="⌨️ Waiting for custom sensitive accounts")
+            self.state['mode'] = 'awaiting_custom_sensitive'
+        else:
+            self.add_message("Please specify the sensitive accounts to search for (e.g., 'Revenue, Reserves').")
+            self.status_label.config(text="⌨️ Waiting for sensitive account keywords")
+            self.state['mode'] = 'awaiting_custom_sensitive'
+    
+    def filter_and_respond_sensitive(self, custom_keywords=None):
+        try:
+            self.status_label.config(text="🔒 Filtering for sensitive account entries...")
+            self.root.update()
+
+            if custom_keywords:
+                sensitive_keywords = custom_keywords
+            else:
+                sensitive_keywords = ['revenue', 'reserves', 'accruals']
+
+            filtered_df = find_sensitive_entries(self.df, column='Account Name', sensitive_keywords=sensitive_keywords)
+
+            if filtered_df.empty:
+                self.add_message(
+                    "⚠️ No records found under the given sensitive accounts.\nWould you like to try different keywords?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Try default keywords", "Use default sensitive account keywords"),
+                        ("🔧 Specify custom keywords", "I want to specify custom sensitive accounts")
+                    ]
+                )
+                self.status_label.config(text="⚠️ No matches found")
+            else:
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_SensitiveAccounts.xlsx")
+                filtered_df.to_excel(output_file_path, index=False)
+
+                self.add_message(
+                    f"✅ Filter complete!\n\n"
+                    f"• Sensitive account keywords used: {', '.join(sensitive_keywords)}\n"
+                    f"• Records found: {len(filtered_df)}\n"
+                    f"• Saved to: Filtered_SensitiveAccounts.xlsx\n\n"
+                    f"Want to apply another filter?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Filter again", "I want to filter data again"),
+                        ("✨ New filter type", "I want different filtering")
+                    ]
+                )
+                self.status_label.config(text="✅ Filter completed successfully")
+        except Exception as e:
+            self.add_message(f"❌ Error during sensitive account filtering: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+
+        self.reset_state()
+        self.state['mode'] = 'filter_selection'
+        self.entry.focus_set()
 
     def handle_bypass_filtering(self, user_input):
         extracted_statuses = extract_bypass_statuses_from_input(user_input)
@@ -822,7 +1194,12 @@ class SmartFilterBot:
                     f"• Bypass statuses used: {', '.join(bypass_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_Bypass.xlsx\n\n"
-                    f"Want to apply another filter?"
+                    f"Want to apply another filter?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Filter again", "I want to filter data again"),
+                        ("✨ New filter type", "I want different filtering")
+                    ]
                 )
                 self.status_label.config(text="✅ Filter completed successfully")
         except Exception as e:
@@ -855,6 +1232,30 @@ class SmartFilterBot:
             self.status_label.config(text="👔 Processing Authorized or Unauthorized filter")
             self.add_message("Perfect! I'll help you filter for Authorized or Unauthorized personnel. Let me process that for you.")
             self.root.after(1000, lambda: self.handle_authorization_filtering(user_input))
+        elif filter_intent == 'bypass':
+            self.state['mode'] = 'bypass_filtering'
+            self.state['filter_type_selected'] = 'bypass'
+            self.status_label.config(text="🔒 Processing Bypass filter")
+            self.add_message("Great! I detected you want to filter by Bypass. Let me help you with that.")
+            self.root.after(1000, lambda: self.handle_bypass_filtering(user_input))
+        elif filter_intent == 'abnormal':
+            self.state['mode'] = 'abnormal_filtering'
+            self.state['filter_type_selected'] = 'abnormal'
+            self.status_label.config(text="⚠️ Processing Abnormal Entries filter")
+            self.add_message("Great! I detected you want to filter for abnormal entries. Let me help you with that.")
+            self.root.after(1000, lambda: self.handle_abnormal_filtering(user_input))
+        elif filter_intent == 'sensitive':
+            self.state['mode'] = 'sensitive_filtering'
+            self.state['filter_type_selected'] = 'sensitive'
+            self.status_label.config(text="🔒 Processing Sensitive Accounts filter")
+            self.add_message("Great! I detected you want to filter for sensitive accounts. Let me help you with that.")
+            self.root.after(1000, lambda: self.handle_sensitive_filtering(user_input))
+        elif filter_intent == 'vague_description':
+            self.state['mode'] = 'vague_description_filtering'
+            self.state['filter_type_selected'] = 'vague_description'
+            self.status_label.config(text="🔍 Processing Vague Descriptions filter")
+            self.add_message("Great! I detected you want to filter for vague or missing descriptions. Let me help you with that.")
+            self.root.after(1000, lambda: self.handle_vague_description_filtering(user_input))  
         else:
             self.state['mode'] = 'filter_selection'
             self.add_message(
@@ -866,6 +1267,9 @@ class SmartFilterBot:
                     ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
                     ("👤 Filter by Authorized or Unauthorized", "I want to filter by Authorization Status"),
                     ("🔒 Filter by Bypass", "I want to filter by Bypass"),
+                    ("⚠️ Filter by Abnormal Entries", "I want to filter by Abnormal Entries"),
+                    ("🔒 Filter Sensitive Accounts", "I want to filter by Sensitive Accounts"),
+                    ("🔍 Filter Vague Descriptions", "I want to filter by Vague Descriptions")
                 ]
             )
             self.status_label.config(text="🤔 Waiting for filter type selection")
@@ -919,7 +1323,11 @@ class SmartFilterBot:
             self.state['mode'] = 'time_filtering'
             self.state['filter_type_selected'] = 'time'
             self.status_label.config(text="🕐 Setting up time filter")
-            self.add_message("Perfect! Let's set up time-based filtering. 🕐\n\nYou can tell me things like:\n• 'Show data between 9am and 5pm'\n• 'Filter from 08:00 to 18:00'\n• 'Get employees working 10am to 6pm'")
+            self.add_message("Perfect! Let's set up time-based filtering. 🕐\n\nYou can tell me things like:\n• 'Show data between 9am and 5pm'\n• 'Filter from 08:00 to 18:00'\n• 'Get employees working 10am to 6pm'",
+            show_options=True,
+                           options=[
+                               ("✅ Use default search", "Manual entries posted outside normal business hours (before 9:00 AM or after 5:00 PM).")
+                           ])
         elif any(word in user_input.lower() for word in ['senior', 'management', 'manager', 'director', 'executive', 'leadership']):
             self.state['mode'] = 'senior_filtering'
             self.state['filter_type_selected'] = 'senior'
@@ -938,6 +1346,15 @@ class SmartFilterBot:
                            options=[
                                ("✅ Use default search", "Entries entered by unauthorized users"),
                            ])
+        elif any(word in user_input.lower() for word in ['abnormal', 'fraud', 'error', 'suspense', 'reversal', 'manual']):
+            self.state['mode'] = 'abnormal_filtering'
+            self.state['filter_type_selected'] = 'abnormal'
+            self.status_label.config(text="🚨 Setting up abnormal entries filter")
+            self.add_message("I can help you find abnormal entries. 🚨\n\nYou can tell me things like:\n• 'Show entries with fraud'\n• 'Get manual entries'\n\nWould you like to use the default keywords or specify custom ones?",
+                           show_options=True,
+                           options=[
+                               ("✅ Use default search", "Entries with abnormal keywords (like 'fraud', 'error', 'suspense', 'reversal', or 'manual').")
+                           ])
         elif any(word in user_input.lower() for word in ['bypass', 'bypassed', 'bypassing', 'system change']):
             self.state['mode'] = 'bypass_filtering'
             self.state['filter_type_selected'] = 'bypass'
@@ -947,16 +1364,36 @@ class SmartFilterBot:
                            options=[
                                ("✅ Use default search", "Entries bypassing standard processes (look for keywords like 'bypass' or 'system change' )")
                            ])
-        
-        
+        elif any(word in user_input.lower() for word in ['sensitive', 'revenue', 'reserves', 'accruals']):
+            self.state['mode'] = 'sensitive_filtering'
+            self.state['filter_type_selected'] = 'sensitive'
+            self.status_label.config(text="🔒 Setting up sensitive accounts filter")
+            self.add_message("I can help you find entries related to sensitive accounts. 🔒\n\nYou can tell me things like:\n• 'Show sensitive accounts'\n• 'Filter revenue or reserves'\n\nWould you like to use the default search or specify custom keywords?",
+                           show_options=True,
+                           options=[
+                               ("✅ Use default search", "Entries under sensitive accounts (like 'revenue', 'reserves', or 'accruals').")
+                           ])
+        elif any(word in user_input.lower() for word in ['vague', 'blank', 'missing', 'no description']):
+            self.state['mode'] = 'vague_description_filtering'
+            self.state['filter_type_selected'] = 'vague_description'
+            self.status_label.config(text="🔍 Setting up vague descriptions filter")
+            self.add_message("I can help you find entries with vague or missing descriptions. 🔍\n\nYou can tell me things like:\n• 'Show blank descriptions'\n• 'Filter entries with no description'\n\nWould you like to use the default search or specify custom keywords?",
+                           show_options=True,
+                           options=[
+                               ("✅ Use default search", "Entries with vague or missing descriptions (like 'blank', 'no description', or 'empty').")
+                           ])
         else:
-            self.add_message("I'm not sure what type of filtering you'd like. Let me show you the available options:",
+            self.add_message(" Let me show you the available options:",
+               
                            show_options=True,
                            options=[
                                ("🕐 Filter by Time", "I want to filter by time"),
                                ("👔 Filter Senior Personnel", "I want to filter senior personnel"),
                                ("👤 Filter by Authorization", "I want to filter by Authorization"),
                                ("🔒 Filter by Bypass", "I want to filter by Bypass"),
+                               ("🚨 Filter by Abnormal", "I want to filter by Abnormal"),
+                               ("🔒 Filter Sensitive Accounts", "I want to filter by Sensitive Accounts"),
+                               ("🔍 Filter Vague Descriptions", "I want to filter by Vague Descriptions")
                            ])
            
     def handle_time_filtering(self, user_input):
@@ -986,7 +1423,98 @@ class SmartFilterBot:
 
         # Process complete request
         self.filter_and_respond_time(start_time, end_time, filter_type)
-      
+
+    def handle_abnormal_filtering(self, user_input):
+        """Handles filtering for abnormal entries."""
+        user_input_lower = user_input.lower()
+
+        # Recognize default search phrases robustly
+        default_keywords = ['fraud', 'error', 'suspense', 'reversal', 'manual']
+        default_phrases = [
+            "entries with abnormal descriptions",
+            "entries with abnormal keywords",
+            "entries with abnormal",
+            "abnormal entries",
+            "use default abnormal keywords",
+            "use default search",
+            "default search",
+            "default"
+        ]
+        # If user input matches any default phrase, use default keywords
+        if any(phrase in user_input_lower for phrase in default_phrases):
+            self.filter_and_respond_abnormal(default_keywords)
+            return
+
+        extracted_keywords = extract_abnormal_keywords_from_input(user_input)
+        if extracted_keywords:
+            self.filter_and_respond_abnormal(extracted_keywords)
+            return
+
+        # Fix: always use default if any default keyword is present, not just if 'default' is typed
+        if (
+            'standard' in user_input_lower or
+            any(kw in user_input_lower for kw in default_keywords)
+        ):
+            self.filter_and_respond_abnormal(default_keywords)
+        elif 'custom' in user_input_lower or 'specify' in user_input_lower:
+            self.add_message("Please specify the abnormal keywords you want to search for (e.g., 'fraud, error, manual').")
+            self.status_label.config(text="⌨️ Waiting for custom abnormal keywords")
+            self.state['mode'] = 'awaiting_custom_abnormal'
+        else:
+            # fallback: prompt user for keywords if nothing matches
+            self.add_message("Please specify the abnormal keywords you want to search for (e.g., 'fraud, error, manual').")
+            self.status_label.config(text="⌨️ Waiting for abnormal keywords")
+            self.state['mode'] = 'awaiting_custom_abnormal'
+    
+    def filter_and_respond_abnormal(self, custom_keywords=None):
+        try:
+            self.status_label.config(text="🚨 Filtering for abnormal entries...")
+            self.root.update()
+
+            # Use custom keywords if provided, otherwise default
+            if custom_keywords:
+                abnormal_keywords = custom_keywords
+            else:
+                abnormal_keywords = ['fraud', 'error', 'suspense', 'reversal', 'manual']
+
+            filtered_df = find_abnormal_entries(self.df, column='Description', abnormal_keywords=abnormal_keywords)
+
+            if filtered_df.empty:
+                self.add_message(
+                    "⚠️ No abnormal records found with the given criteria.\nWould you like to try different keywords?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Try default keywords", "Use default abnormal keywords"),
+                        ("🔧 Specify custom keywords", "I want to specify custom abnormal keywords")
+                    ]
+                )
+                self.status_label.config(text="⚠️ No matches found")
+            else:
+                output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_AbnormalEntries.xlsx")
+                filtered_df.to_excel(output_file_path, index=False)
+
+                self.add_message(
+                    f"✅ Filter complete!\n\n"
+                    f"• Abnormal keywords used: {', '.join(abnormal_keywords)}\n"
+                    f"• Records found: {len(filtered_df)}\n"
+                    f"• Saved to: Filtered_AbnormalEntries.xlsx\n\n"
+                    f"Want to apply another filter?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Filter again", "I want to filter data again"),
+                        ("✨ New filter type", "I want different filtering")
+                    ]
+                )
+                self.status_label.config(text="✅ Filter completed successfully")
+        except Exception as e:
+            self.add_message(f"❌ Error during abnormal filtering: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+        # Reset for next task
+        self.reset_state()
+        self.state['mode'] = 'filter_selection'
+        self.entry.focus_set()
+
+
     def handle_senior_filtering(self, user_input):
         """Handle senior personnel filtering logic"""
         user_input_lower = user_input.lower()
@@ -1079,6 +1607,8 @@ class SmartFilterBot:
                                     ("🔄 Try default titles", "Use default senior titles"),
                                     ("🔧 Specify custom titles", "I want to specify custom titles")
                                 ])
+
+
                 self.status_label.config(text="⚠️ No matches found")
             else:
                 output_file_path = os.path.join(os.path.dirname(self.file_path), "Filtered_SeniorPersonnel.xlsx")
