@@ -7,6 +7,78 @@ from tkinter import filedialog
 import re
 from dateutil import parser as dtparser
 from datetime import datetime
+import random
+
+def generate_high_risk_report(df, output_path="High_Risk_Report.xlsx"):
+    df = df.copy()
+    df['High Risk Criteria Met'] = ''
+
+    def append_criteria(index, criteria_number):
+        current = df.at[index, 'High Risk Criteria Met']
+        if current:
+            df.at[index, 'High Risk Criteria Met'] = current + f", Criteria {criteria_number}"
+        else:
+            df.at[index, 'High Risk Criteria Met'] = f"Criteria {criteria_number}"
+
+    # 1. Manual entries outside working hours
+    time_filtered, _ = filter_by_time_range(
+        df, ['00:00:00', '17:00:00'], ['09:00:00', '23:59:59'],
+        filter_type='outside',
+        time_column='Time',
+        time_format="%H:%M:%S"
+    )
+    for i in time_filtered.index:
+        append_criteria(i, 1)
+
+    # 2. Bypass entries
+    bypass_keywords = ['bypass', 'bypassing', 'bypassed', 'system change', 'system bypass']
+    bypass_df = find_bypass_entries(df, title_column='Description', bypass_keywords=bypass_keywords)
+    for i in bypass_df.index:
+        append_criteria(i, 2)
+
+    # 3. Vague or missing descriptions
+    vague_df = find_vague_or_blank_descriptions(df, column='Description')
+    for i in vague_df.index:
+        append_criteria(i, 3)
+
+    # 4. Unauthorized users
+    auth_df = find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=['unauthorized'])
+    for i in auth_df.index:
+        append_criteria(i, 4)
+
+    # 5. Senior personnel
+    senior_titles = ['manager', 'senior', 'director', 'vp', 'cfo', 'ceo']
+    senior_df = find_senior_personnel_entries(df, title_column='Title', senior_keywords=senior_titles)
+    for i in senior_df.index:
+        append_criteria(i, 5)
+
+    # 6. Sensitive accounts
+    sensitive_keywords = ['revenue', 'reserves', 'accruals']
+    sensitive_df = find_sensitive_entries(df, column='Account Name', sensitive_keywords=sensitive_keywords)
+    for i in sensitive_df.index:
+        append_criteria(i, 6)
+
+    # 7. Abnormal descriptions
+    abnormal_keywords = ['fraud', 'error', 'suspense', 'reversal', 'manual']
+    abnormal_df = find_abnormal_entries(df, column='Description', abnormal_keywords=abnormal_keywords)
+    for i in abnormal_df.index:
+        append_criteria(i, 7)
+
+    # Final filtered result
+    high_risk_df = df[df['High Risk Criteria Met'] != ''].copy()
+    if high_risk_df.empty:
+        return None, None
+
+    # Sample 20–50 entries
+    sample_size = min(len(high_risk_df), 50)
+    sample_df = high_risk_df.sample(n=sample_size, random_state=42)
+
+    output_file = os.path.join(os.path.dirname(output_path), "High_Risk_Report.xlsx")
+    with pd.ExcelWriter(output_file) as writer:
+        high_risk_df.to_excel(writer, sheet_name='High Risk Entries', index=False)
+        sample_df.to_excel(writer, sheet_name='Sample Entries', index=False)
+
+    return output_file, len(high_risk_df)
 
 def filter_by_time_range(df, start_time_str, end_time_str, filter_type, time_column='Time', time_format="%H:%M:%S"):
     df['TimeOnly'] = pd.to_datetime(df[time_column], format=time_format, errors='coerce').dt.time
@@ -506,7 +578,7 @@ def extract_bypass_statuses_from_input(user_input):
     if any(kw in lowered for kw in default_keywords):
         return default_keywords
     # Otherwise, try to extract keywords as before
-    parts = re.split(r',|\band\b|\bor\b', lowered_input)
+    parts = re.split(r',|\band\b|\bor\b', lowered)
     found_keywords = []
     for part in parts:
         word = part.strip().rstrip('s')
@@ -805,6 +877,16 @@ class SmartFilterBot:
             command=self.upload_excel_file
         )
         self.upload_btn.pack(pady=(5, 0))
+        # High-Risk Detection button
+        self.high_risk_btn = tk.Button(
+            header_frame, text="⚠️ Detect High-Risk Entries",
+            font=("Segoe UI", 10, "bold"),
+            bg="#dc3545", fg="white", bd=0, relief=tk.FLAT, cursor="hand2",
+            padx=10, pady=4,
+            command=self.detect_high_risk_entries
+        )
+        self.high_risk_btn.pack(pady=(5, 0))
+
         
         # Chat container
         chat_container = tk.Frame(self.root, bg=self.colors['chat_bg'])
@@ -868,6 +950,37 @@ class SmartFilterBot:
         # Bind mousewheel to canvas
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.root.bind_all("<MouseWheel>", self.on_mousewheel)
+
+    def detect_high_risk_entries(self):
+        if self.df.empty:
+            messagebox.showwarning("No Data", "❌ Please upload an Excel file first.")
+            return
+
+        self.add_message("🕵️‍♂️ Scanning for high-risk entries based on 7 criteria...")
+        self.status_label.config(text="⚠️ Running high-risk detection...")
+
+        try:
+            report_path, total_found = generate_high_risk_report(self.df, output_path=self.file_path)
+            if report_path:
+                self.add_message(
+                    f"✅ High-risk detection complete!\n\n"
+                    f"• Total High-Risk Entries: {total_found}\n"
+                    f"• Saved to: High_Risk_Report.xlsx\n\n"
+                    f"Would you like to apply other filters?",
+                    show_options=True,
+                    options=[
+                        ("🔄 Filter again", "I want to filter data again"),
+                        ("✨ New filter type", "I want different filtering")
+                    ]
+                )
+                self.status_label.config(text="✅ High-risk report ready.")
+            else:
+                self.add_message("✅ No high-risk entries found based on the defined criteria.")
+                self.status_label.config(text="✅ No high-risk entries found.")
+        except Exception as e:
+            self.add_message(f"❌ Error while generating high-risk report: {str(e)}")
+            self.status_label.config(text="❌ Error occurred")
+
 
     def upload_excel_file(self):
         file_path = filedialog.askopenfilename(
