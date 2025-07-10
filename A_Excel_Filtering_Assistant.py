@@ -250,34 +250,37 @@ TITLE_PATTERNS = [
     # 8. show/filter/get including roles like ...
     r'(?:show|filter|get|list)\s+(?:entries\s+)?(?:including|by|for)?\s*(?:roles?|titles?|positions?)?\s*(?:like)?\s*([a-zA-Z0-9\s,]+)',
 
-    # 9. Question phrasing: "Who did this? CFO?"
+    # 9. show entries by <title>
+    r'show\s+entries\s+by\s+([a-zA-Z0-9\s,]+)',
+
+    # 10. Question phrasing: "Who did this? CFO?"
     r'who\s+(?:made|entered|did|submitted)[^?]*\??.*?\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
 
-    # 10. Casual: "By CFO right?", "CEO did it?"
+    # 11. Casual: "By CFO right?", "CEO did it?"
     r'\b(?:by|from)\s+(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
 
-    # 11. Loose list with or/and
+    # 12. Loose list with or/and
     r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
 
-    # 12. Imperative: "Only CFO", "Just CEO"
+    # 13. Imperative: "Only CFO", "Just CEO"
     r'(?:only|just)\s+([a-zA-Z0-9\s]+)',
 
-    # 13. Exclusion
+    # 14. Exclusion
     r'(?:exclude|don\'?t\s+show|remove)\s+([a-zA-Z0-9\s,]+)',
 
-    # 14. Basic match with "entries by"
+    # 15. Basic match with "entries by"
     r'entries\s+by\s+([a-zA-Z0-9\s,]+)',
 
-    # 15. Match embedded in questions
+    # 16. Match embedded in questions
     r'entries.*\b(?:by|from)\b.*\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b',
 
-    # 16. Conversations: "Anyone from finance manager?", "Entries done by CEO right?"
+    # 17. Conversations: "Anyone from finance manager?", "Entries done by CEO right?"
     r'(?:anyone\s+from|entries\s+(?:done|made)\s+by)\s+([a-zA-Z0-9\s]+)',
 
-    # 17. Embedded inside longer condition: “after 5pm by CEO”
+    # 18. Embedded inside longer condition: “after 5pm by CEO”
     r'after\s+\d+(?::\d+)?\s*(?:am|pm)?\s+by\s+([a-zA-Z0-9\s]+)',
 
-    # 18. Fallback: exact known titles anywhere in text
+    # 19. Fallback: exact known titles anywhere in text
     r'\b(CFO|CEO|Finance Manager|Senior Accountant|Junior Accountant)\b'
 ]
 
@@ -290,42 +293,44 @@ def extract_titles_from_input(user_input):
     multi_word_titles = [
         "senior accountant", "junior accountant", "finance manager"
     ]
-    # Lowercase input for easier matching
     lowered_input = user_input.lower()
-    # First, extract all multi-word titles as phrases
     found = []
     temp_input = lowered_input
+    # Extract and remove multi-word titles first
     for title in multi_word_titles:
         if title in temp_input:
             found.append(title)
-            # Remove matched multi-word title to avoid splitting it later
             temp_input = temp_input.replace(title, " ")
-    # Now, apply patterns to the remaining input (without multi-word titles)
+    # Collect all matches from all patterns
     for pattern in TITLE_PATTERNS:
-        match = re.findall(pattern, temp_input, re.IGNORECASE)
-        if match:
-            # If quoted, match is already a list
-            if pattern == r'"([^"]+)"':
-                found += [m.strip().lower() for m in match if m.strip()]
-            #if not quoted, match is a single string
-            elif pattern == r'(?:title|role|position)\s*(?:is|=|:)?\s*([a-zA-Z0-9\s]+)':
-                # Match single title/role/position
-                found += [match[0].strip().lower()]
-            # If 'titles containing ...'
-            elif pattern == r'titles?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)':
-                titles_str = match[0]
-                parts = re.split(r',|\band\b|\bor\b', titles_str)
-                found += [p.strip().lower() for p in parts if p.strip()]
-            # If comma/and/or separated
-            elif pattern == r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)':
-                parts = re.split(r',|\band\b|\bor\b', match[0])
-                found += [p.strip().lower() for p in parts if p.strip()]
-            # Single word fallback
-            elif pattern == r'([a-zA-Z0-9\s]+)':
-                found += [match[0].strip().lower()]
-            # Stop after first match to avoid duplicates
-            if found:
-                break
+        matches = re.findall(pattern, temp_input, re.IGNORECASE)
+        if matches:
+            # flatten if tuple
+            if isinstance(matches[0], tuple):
+                matches = [m for tup in matches for m in tup if m]
+            for match in matches:
+                if isinstance(match, str):
+                    # Always split for comma/and/or patterns and "titles containing" patterns
+                    if pattern in [
+                        r'([a-zA-Z0-9\s]+(?:,|\band\b|\bor\b)[a-zA-Z0-9\s,]*)',
+                        r'titles?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)',
+                        r'positions?\s+(?:containing|including|with|having)\s+([a-zA-Z0-9\s,]+)',
+                        r'(?:title|role|position)\s+is\s+(?:one of|among)\s+([a-zA-Z0-9\s,]+)',
+                        r'(?:done|entered|approved|submitted)\s+by\s+([a-zA-Z0-9\s,]+)',
+                        r'(?:entries|records|transactions|logs)?\s*(?:made|entered|created|done)?\s*by\s+([a-zA-Z0-9\s,]+)',
+                        r'(?:show|filter|get|list)\s+(?:entries\s+)?(?:including|by|for)?\s*(?:roles?|titles?|positions?)?\s*(?:like)?\s*([a-zA-Z0-9\s,]+)',
+                        r'(?:exclude|don\'?t\s+show|remove)\s+([a-zA-Z0-9\s,]+)',
+                        r'entries\s+by\s+([a-zA-Z0-9\s,]+)',
+                        r'(?:anyone\s+from|entries\s+(?:done|made)\s+by)\s+([a-zA-Z0-9\s]+)'
+                    ]:
+                        # Fix: for "entries by <title>", don't match the literal "entries by" as a title
+                        # Only split and add if the match is not empty and not just "entries by"
+                        parts = re.split(r',|\band\b|\bor\b', match)
+                        found += [p.strip().lower() for p in parts if p.strip() and p.strip().lower() != "entries by"]
+                    else:
+                        val = match.strip().lower()
+                        if not any(val != t and val in t for t in found):
+                            found.append(val)
     # Remove duplicates while preserving order
     seen = set()
     result = []
@@ -335,7 +340,6 @@ def extract_titles_from_input(user_input):
             result.append(t)
     return result if result else None
 
-#Authorization patternsfor extracting multiple keywords from user input (comma, 'and', 'or', quoted, etc.)
 def find_authorization_entries(df, title_column='Authorization Status', authorization_keywords=None):
     """
     Filter entries to show only those where the Title column contains
@@ -502,7 +506,7 @@ def extract_bypass_statuses_from_input(user_input):
     if any(kw in lowered for kw in default_keywords):
         return default_keywords
     # Otherwise, try to extract keywords as before
-    parts = re.split(r',|\band\b|\bor\b', lowered)
+    parts = re.split(r',|\band\b|\bor\b', lowered_input)
     found_keywords = []
     for part in parts:
         word = part.strip().rstrip('s')
@@ -1146,7 +1150,7 @@ class SmartFilterBot:
 
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Sensitive account keywords used: {', '.join(sensitive_keywords)}\n"
+                    #f"• Sensitive account keywords used: {', '.join(sensitive_keywords)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_SensitiveAccounts.xlsx\n\n"
                     f"Want to apply another filter?",
@@ -1191,7 +1195,7 @@ class SmartFilterBot:
                 filtered_df.to_excel(output_file_path, index=False)
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Bypass statuses used: {', '.join(bypass_titles)}\n"
+                   # f"• Bypass statuses used: {', '.join(bypass_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_Bypass.xlsx\n\n"
                     f"Want to apply another filter?",
@@ -1299,7 +1303,7 @@ class SmartFilterBot:
                 filtered_df.to_excel(output_file_path, index=False)
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Authorization statuses used: {', '.join(authorization_titles)}\n"
+                    #f"• Authorization statuses used: {', '.join(authorization_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_Authorization.xlsx\n\n"
                     f"Want to apply another filter?",
@@ -1332,7 +1336,7 @@ class SmartFilterBot:
             self.state['mode'] = 'senior_filtering'
             self.state['filter_type_selected'] = 'senior'
             self.status_label.config(text="👔 Setting up senior personnel filter")
-            self.add_message("Excellent! I'll help you filter for entries entered by senior personnel. 👔\n\nYou can ask me things like:\n• 'Entries entered by senior personnel'\n• 'Show entries with titles containing \"Manager\", \"Senior\", \"Director\", \"VP\", \"CFO\", or \"CEO\"'\n• 'Filter based on executive roles or leadership titles'\n• Comma/and/or-separated titles like 'Manager, Director and VP'\n• Quoted titles like '\"CFO\"' or '\"Senior Analyst\"'\n\nWould you like to use the default titles or specify your own?",
+            self.add_message("Excellent! I'll help you filter for entries entered by senior personnel. 👔\n\nYou can ask me things like:\n• 'Entries by senior/manager/cfo'\n• 'Show entries with titles containing \"Manager\", \"Senior\", \"Director\", \"VP\", \"CFO\", or \"CEO\"' \nWould you like to use the default titles or specify your own?",
                            show_options=True,
                            options=[
                                ("✅ Use default search", "Entries entered by senior personnel (titles containing \"Manager\", \"Senior\", \"Director\", \"VP\", \"CFO\", or \"CEO\")."),
@@ -1350,7 +1354,7 @@ class SmartFilterBot:
             self.state['mode'] = 'abnormal_filtering'
             self.state['filter_type_selected'] = 'abnormal'
             self.status_label.config(text="🚨 Setting up abnormal entries filter")
-            self.add_message("I can help you find abnormal entries. 🚨\n\nYou can tell me things like:\n• 'Show entries with fraud'\n• 'Get manual entries'\n\nWould you like to use the default keywords or specify custom ones?",
+            self.add_message("I can help you find abnormal entries. 🚨\n\nYou can tell me things like:\n• 'Show entries with suspense/fraud/manual'\n\nWould you like to use the default keywords or specify custom ones?",
                            show_options=True,
                            options=[
                                ("✅ Use default search", "Entries with abnormal keywords (like 'fraud', 'error', 'suspense', 'reversal', or 'manual').")
@@ -1495,7 +1499,7 @@ class SmartFilterBot:
 
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Abnormal keywords used: {', '.join(abnormal_keywords)}\n"
+                    #f"• Abnormal keywords used: {', '.join(abnormal_keywords)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_AbnormalEntries.xlsx\n\n"
                     f"Want to apply another filter?",
@@ -1616,7 +1620,7 @@ class SmartFilterBot:
 
                 self.add_message(
                     f"✅ Filter complete!\n\n"
-                    f"• Senior titles used: {', '.join(senior_titles)}\n"
+                   # f"• Senior titles used: {', '.join(senior_titles)}\n"
                     f"• Records found: {len(filtered_df)}\n"
                     f"• Saved to: Filtered_SeniorPersonnel.xlsx\n\n"
                     f"Want to apply another filter?",
