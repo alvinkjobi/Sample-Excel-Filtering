@@ -1,6 +1,6 @@
 # 📊 Smart Excel Filtering Assistant
 
-A powerful desktop-based assistant built with **Python** and **Tkinter** to intelligently filter high-risk journal entries in Excel files. It supports natural language queries, multiple filtering criteria, and produces clean reports for audit and finance workflows.
+A powerful desktop-based assistant built with **Python** and **Tkinter** to intelligently filter high-risk journal entries in Excel files. It supports natural language queries, multiple filtering criteria, and produces clean reports for audit and finance workflows
 
 ---
 
